@@ -1,24 +1,40 @@
 name: Build JJ APK
+
 on:
   push:
     branches: [main, master]
   workflow_dispatch:
+
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
-      - uses: android-actions/setup-android@v3
+
+      # O runner ubuntu-latest já traz o Android SDK (ANDROID_HOME) com platforms/build-tools.
+      # Não usamos android-actions/setup-android: ele roda `sdkmanager tools`, pacote que
+      # não existe mais no cmdline-tools 16.0 e derrubava o build ("Failed to find package 'tools'").
+      - name: Aceitar licencas do Android SDK
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: 8.7
+          gradle-version: "8.7"
+
       - name: Build debug APK
-        run: gradle assembleDebug --no-daemon
+        run: gradle assembleDebug --no-daemon --stacktrace
+
       - uses: actions/upload-artifact@v4
         with:
           name: JJ-apk
           path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

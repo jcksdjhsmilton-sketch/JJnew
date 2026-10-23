@@ -7,3 +7,5 @@ App Android (TV/tablet/celular, WebView) + backend agêntico com **openai/gpt-os
 - `backend/vault_template/` - contexto (`00_JJ_Contexto.md`) e playbooks prontos para colar no seu Obsidian (o servidor também cria sozinho).
 
 APK: aba **Actions > Build JJ APK > Run workflow**; baixe o artifact `JJ-apk`.
+
+Obs.: o workflow usa o Android SDK que já vem no runner `ubuntu-latest` (sem `setup-android`). Para o `Kaggle` publicar o `.github/workflows` o token precisa da permissão **workflow** (classic) ou **Workflows: Read and write** (fine-grained).
