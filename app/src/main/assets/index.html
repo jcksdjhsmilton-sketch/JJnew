@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>JJ</title>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;800&family=Rajdhani:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--c:#00e5ff;--c2:#0a84ff;--bg:#020912;--panel:rgba(6,26,46,.72);--line:rgba(0,229,255,.28);--tx:#d4f1ff;--dim:#6f97b0;--warn:#ffb020;--err:#ff4d6d;--ok:#3dffb0}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font:500 2.6vh/1.45 Rajdhani,'Segoe UI',Roboto,sans-serif}
+body{background:radial-gradient(ellipse at 18% 40%,#06233f 0,#020912 62%),var(--bg)}
+body:before{content:"";position:fixed;inset:0;background:linear-gradient(var(--line) 1px,transparent 1px) 0 0/100% 4.5vh,linear-gradient(90deg,var(--line) 1px,transparent 1px) 0 0/4.5vh 100%;opacity:.07;pointer-events:none}
+#app{position:relative;display:grid;grid-template-columns:32% 1fr;gap:2.4vw;height:100%;padding:3vh 2.4vw}
+#hud{display:flex;flex-direction:column;align-items:center;justify-content:space-between;border-right:1px solid var(--line);padding-right:2.4vw}
+.brand{font:800 4.2vh Orbitron,sans-serif;letter-spacing:.5vh;color:var(--c);text-shadow:0 0 16px var(--c)}
+.brand small{display:block;font:500 1.7vh Orbitron,sans-serif;letter-spacing:.3vh;color:var(--dim);text-shadow:none;text-align:center}
+.reactor{position:relative;width:31vh;height:31vh}
+.ring{position:absolute;border-radius:50%}
+.r1{inset:0;border:2px dashed var(--c);opacity:.55;animation:spin 30s linear infinite}
+.r2{inset:8%;border:4px solid transparent;border-top-color:var(--c);border-bottom-color:var(--c2);animation:spin 7s linear infinite reverse;filter:drop-shadow(0 0 6px var(--c))}
+.r3{inset:20%;border:2px dotted var(--c2);animation:spin 16s linear infinite}
+.r4{inset:29%;border:3px solid transparent;border-left-color:var(--c);border-right-color:var(--c);animation:spin 4s linear infinite}
+.core{position:absolute;inset:38%;border-radius:50%;background:radial-gradient(circle,#fff 0,var(--c) 38%,rgba(0,229,255,.08) 72%);box-shadow:0 0 30px var(--c),0 0 80px var(--c2);animation:pulse 3.2s ease-in-out infinite}
+.busy .r2{animation-duration:1.3s}.busy .r4{animation-duration:.9s}.busy .core{animation-duration:.9s}
+.err .core{background:radial-gradient(circle,#fff 0,var(--err) 40%,transparent 72%);box-shadow:0 0 40px var(--err)}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulse{50%{transform:scale(.82);opacity:.8}}
+#st{font:500 2vh Orbitron,sans-serif;letter-spacing:.3vh;color:var(--c);text-align:center;min-height:6vh}
+#clock{font:800 6.4vh Orbitron,sans-serif;color:var(--tx);text-align:center;letter-spacing:.2vh}
+#date{font-size:2.3vh;color:var(--dim);text-align:center;text-transform:capitalize}
+#main{display:flex;flex-direction:column;min-width:0;min-height:0;gap:2vh}
+#chat{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:1.6vh;padding-right:1vw;scrollbar-width:thin}
+#chat::-webkit-scrollbar{width:6px}#chat::-webkit-scrollbar-thumb{background:var(--line)}
+.m{max-width:88%;padding:1.4vh 1.6vw;border:1px solid var(--line);background:var(--panel);white-space:pre-wrap;word-break:break-word;clip-path:polygon(0 0,calc(100% - 14px) 0,100% 14px,100% 100%,14px 100%,0 calc(100% - 14px))}
+.m.u{align-self:flex-end;border-color:var(--c2);background:rgba(10,132,255,.14)}
+.m.a{align-self:flex-start;border-left:3px solid var(--c)}
+.m.e{border-color:var(--err);color:#ffc2cd}
+.m pre{background:#010a14;border:1px solid var(--line);padding:1vh;margin:.8vh 0;overflow-x:auto;font:1.9vh/1.4 ui-monospace,Consolas,monospace;color:#9fffe0}
+.m code{background:#010a14;padding:0 .4vw;color:#9fffe0;font-family:ui-monospace,Consolas,monospace}
+.tool{align-self:flex-start;max-width:88%;font:1.9vh ui-monospace,Consolas,monospace;color:var(--warn);border-left:2px solid var(--warn);padding:.3vh 1vw;background:rgba(255,176,32,.06)}
+.tool.done{color:var(--ok);border-color:var(--ok);background:rgba(61,255,176,.05)}
+.tool summary{cursor:pointer;outline:none}.tool i{color:var(--dim);font-style:normal}
+.tool pre{white-space:pre-wrap;max-height:22vh;overflow:auto;color:var(--dim);margin-top:.5vh}
+#bar{display:flex;gap:1vw}
+#in{flex:1;background:var(--panel);border:1px solid var(--line);color:var(--tx);font:inherit;padding:1.4vh 1.4vw;clip-path:polygon(0 0,calc(100% - 12px) 0,100% 12px,100% 100%,0 100%)}
+button{background:rgba(0,229,255,.1);border:1px solid var(--c);color:var(--c);font:600 2vh Orbitron,sans-serif;padding:1.2vh 1.6vw;cursor:pointer}
+button:disabled{opacity:.4}
+button:focus,input:focus,textarea:focus,select:focus{outline:none;border-color:var(--c);box-shadow:0 0 0 2px var(--c),0 0 18px var(--c)}
+#hint{position:fixed;right:1.4vw;bottom:.8vh;font-size:1.5vh;color:var(--dim)}
+#set{position:fixed;inset:0;z-index:9;background:rgba(2,9,18,.9);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center}
+.box{width:min(940px,94vw);height:88vh;display:flex;flex-direction:column;border:1px solid var(--c);background:rgba(4,18,34,.96);box-shadow:0 0 40px rgba(0,229,255,.25)}
+.tabs{display:flex;border-bottom:1px solid var(--line)}
+.tabs button{flex:1;border:0;border-bottom:3px solid transparent;background:none;color:var(--dim);padding:1.6vh}
+.tabs button.on{color:var(--c);border-bottom-color:var(--c)}
+.tabs #x{flex:0 0 8vh;color:var(--err)}
+.pane{flex:1;overflow:auto;padding:2vh 2vw;display:flex;flex-direction:column;gap:1.4vh}
+.f label{display:block;color:var(--dim);font-size:2vh;margin-bottom:.3vh}
+.f input[type=text],.f input[type=password],.f input[type=number],.f textarea{width:100%;background:#010a14;border:1px solid var(--line);color:var(--tx);font:inherit;padding:1vh 1vw}
+.f textarea{height:14vh;resize:none}
+.f.chk{display:flex;gap:1vw;align-items:center}.f.chk input{width:3vh;height:3vh}
+.row{display:flex;gap:1vw;flex-wrap:wrap}
+#logbox{flex:1;overflow:auto;background:#010a14;border:1px solid var(--line);padding:1vh 1vw;font:1.8vh/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
+.INFO{color:var(--tx)}.TOOL{color:var(--warn)}.RESULT{color:var(--ok)}.WARN{color:#ffd36b}.ERROR{color:var(--err)}.t{color:var(--dim)}
+.hide{display:none!important}
+@media (prefers-reduced-motion:reduce){.ring,.core{animation:none}}
+@media (max-aspect-ratio:1/1){#app{grid-template-columns:1fr;grid-template-rows:auto 1fr}#hud{display:none}}
+</style></head><body>
+<div id="app">
+  <section id="hud">
+    <div class="brand">J.J.<small>JARVIS JAMES</small></div>
+    <div class="reactor" id="rx"><i class="ring r1"></i><i class="ring r2"></i><i class="ring r3"></i><i class="ring r4"></i><i class="core"></i></div>
+    <div id="st">CONECTANDO…</div>
+    <div><div id="clock">--:--</div><div id="date"></div></div>
+  </section>
+  <section id="main">
+    <div id="chat"></div>
+    <div id="bar"><input id="in" type="text" autocomplete="off" placeholder="Fale comigo…"><button id="go">ENVIAR</button></div>
+  </section>
+</div>
+<div id="hint">3 dedos na tela / botão MENU = configurações</div>
+
+<div id="set" class="hide">
+  <div class="box">
+    <div class="tabs"><button data-t="aj" class="on">AJUSTES</button><button data-t="lg">LOGS</button><button id="x">✕</button></div>
+    <div id="p-aj" class="pane"></div>
+    <div id="p-lg" class="pane hide">
+      <div class="row"><button id="sA" class="on">APP</button><button id="sS">SERVIDOR</button><button id="cl">LIMPAR</button></div>
+      <div id="logbox"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $=s=>document.querySelector(s), esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+const DEF={gateway:'',token:'',groqKey:'',model:'llama-3.3-70b-versatile',temp:0.3,steps:15,user:'Chefe',extra:'',speak:false};
+const ld=(k,d)=>{try{return JSON.parse(localStorage.getItem(k))??d}catch(e){return d}};
+let S=Object.assign({},DEF,ld('jj_s',{})), H=ld('jj_h',[]), LOG=[], tab='aj', src='app', busy=false;
+const chat=$('#chat');
+
+function jlog(l,m){LOG.push({t:new Date().toLocaleTimeString(),l,m:String(m)});if(LOG.length>500)LOG.shift();if(isLogs()&&src==='app')renderLogs(LOG)}
+const isLogs=()=>!$('#set').classList.contains('hide')&&tab==='lg';
+const base=()=>S.gateway.trim().replace(/\/+$/,'');
+const hdr=()=>({'Content-Type':'application/json','X-JJ-Token':S.token,'ngrok-skip-browser-warning':'1'});
+
+/* ---------- relógio ---------- */
+function tick(){const n=new Date();$('#clock').textContent=n.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});$('#date').textContent=n.toLocaleDateString('pt-BR',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}
+setInterval(tick,5000);tick();
+
+/* ---------- UI helpers ---------- */
+function setSt(t,mode){$('#st').textContent=t;const r=$('#rx');r.classList.toggle('busy',mode==='busy');r.classList.toggle('err',mode==='err')}
+function scroll(){chat.scrollTop=chat.scrollHeight}
+function md(s){s=esc(s);s=s.replace(/```\w*\n?([\s\S]*?)```/g,'<pre>$1</pre>').replace(/`([^`\n]+)`/g,'<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>').replace(/^#{1,3} (.+)$/gm,'<b>$1</b>').replace(/^[-*] /gm,'• ');return s}
+function add(cls,html,raw){const d=document.createElement('div');d.className='m '+cls;if(raw)d.textContent=html;else d.innerHTML=html;chat.appendChild(d);scroll();return d}
+const brief=a=>String(a.command||a.query||a.url||a.path||a.source||a.code||JSON.stringify(a)).replace(/\s+/g,' ').slice(0,90);
+function toolCard(e){const d=document.createElement('details');d.className='tool';d.id='t'+e.id;d.innerHTML='<summary>⚙ '+esc(e.name)+' <i>'+esc(brief(e.args||{}))+'</i></summary><pre></pre>';chat.appendChild(d);scroll()}
+function toolDone(e){const d=document.getElementById('t'+e.id);if(d){d.classList.add('done');d.querySelector('pre').textContent=e.result}}
+function speak(t){if(!S.speak||!('speechSynthesis' in window))return;speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(t.replace(/```[\s\S]*?```/g,'').replace(/[`*#]/g,'').slice(0,500));u.lang='pt-BR';speechSynthesis.speak(u)}
+const saveH=()=>localStorage.setItem('jj_h',JSON.stringify(H.slice(-40)));
+
+/* ---------- conversa ---------- */
+async function send(txt){
+  txt=txt.trim();if(busy||!txt)return;
+  if(!base()){add('e','Configure o Gateway: toque com 3 dedos (ou botão MENU) → Ajustes.',1);openSet();return}
+  busy=true;$('#go').disabled=true;add('u',txt,1);H.push({role:'user',content:txt});saveH();setSt('PENSANDO…','busy');jlog('INFO','→ '+txt);
+  let fin=null;
+  const onEv=e=>{
+    if(e.type==='tool_call'){setSt('EXECUTANDO: '+e.name.toUpperCase(),'busy');toolCard(e);jlog('TOOL',e.name+' '+brief(e.args))}
+    else if(e.type==='tool_result'){toolDone(e);setSt('PENSANDO…','busy');jlog('RESULT',e.name+': '+e.result.slice(0,200))}
+    else if(e.type==='final'){fin=e.content}
+    else if(e.type==='error'){throw new Error(e.message)}
+  };
+  try{
+    const r=await fetch(base()+'/chat',{method:'POST',headers:hdr(),body:JSON.stringify({messages:H.slice(-24),groq_key:S.groqKey,model:S.model,temperature:+S.temp,max_steps:+S.steps,user_name:S.user,extra_prompt:S.extra})});
+    if(!r.ok)throw new Error('HTTP '+r.status+' '+(await r.text()).slice(0,160));
+    const rd=r.body.getReader(),dec=new TextDecoder();let buf='';
+    for(;;){const {done,value}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});let i;
+      while((i=buf.indexOf('\n'))>=0){const ln=buf.slice(0,i).trim();buf=buf.slice(i+1);if(ln)onEv(JSON.parse(ln))}}
+    if(fin!==null){add('a',md(fin));H.push({role:'assistant',content:fin});saveH();speak(fin)}
+    setSt('ONLINE')
+  }catch(err){add('e','Falha: '+err.message,1);jlog('ERROR',err.message);setSt('ERRO','err')}
+  busy=false;$('#go').disabled=false;$('#in').focus()
+}
+$('#go').onclick=()=>{const i=$('#in');const t=i.value;i.value='';send(t)};
+$('#in').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();$('#go').click()}});
+
+async function health(){
+  if(!base()){setSt('SEM GATEWAY','err');return false}
+  try{const r=await fetch(base()+'/health',{headers:hdr()});if(!r.ok)throw new Error('HTTP '+r.status);const j=await r.json();setSt('ONLINE');jlog('INFO','Servidor OK: '+j.time);return true}
+  catch(e){setSt('OFFLINE','err');jlog('ERROR','health: '+e.message);return false}
+}
+
+/* ---------- configurações (3 dedos / MENU) ---------- */
+const FIELDS=[['gateway','Gateway (URL do túnel do Colab)','text'],['token','Token de acesso (JJ_TOKEN)','password'],['groqKey','Groq API Key','password'],['model','Modelo Groq','text'],['temp','Temperatura (0 a 1)','number'],['steps','Máximo de passos do agente','number'],['user','Como te chamar','text'],['extra','Instruções extras para o system prompt','textarea'],['speak','Falar as respostas em voz alta','checkbox']];
+function buildSettings(){
+  const p=$('#p-aj');p.innerHTML='';
+  FIELDS.forEach(([k,l,t])=>{
+    const w=document.createElement('div');w.className='f'+(t==='checkbox'?' chk':'');
+    const i=document.createElement(t==='textarea'?'textarea':'input');if(t!=='textarea')i.type=t;if(t==='number')i.step='any';
+    if(t==='checkbox')i.checked=!!S[k];else i.value=S[k];
+    i.oninput=i.onchange=()=>{S[k]=t==='checkbox'?i.checked:(t==='number'?+i.value:i.value);localStorage.setItem('jj_s',JSON.stringify(S))};
+    const lb=document.createElement('label');lb.textContent=l;
+    if(t==='checkbox'){w.append(i,lb)}else{w.append(lb,i)}p.appendChild(w)});
+  const r=document.createElement('div');r.className='row';
+  [['TESTAR CONEXÃO',async()=>{setSt('TESTANDO…','busy');const ok=await health();alert(ok?'Conectado ao servidor!':'Sem conexão. Veja a aba LOGS.')}],
+   ['LIMPAR CONVERSA',()=>{H=[];saveH();chat.innerHTML='';greet();closeSet()}]].forEach(([n,f])=>{const b=document.createElement('button');b.textContent=n;b.onclick=f;r.appendChild(b)});
+  p.appendChild(r)
+}
+function openSet(){buildSettings();$('#set').classList.remove('hide');showTab(tab);$('#x').focus()}
+function closeSet(){$('#set').classList.add('hide');$('#in').blur();health()}
+function toggleSettings(){$('#set').classList.contains('hide')?openSet():closeSet()}
+function jjBack(){if(!$('#set').classList.contains('hide')){closeSet();return true}return false}
+$('#x').onclick=closeSet;
+document.querySelectorAll('.tabs [data-t]').forEach(b=>b.onclick=()=>showTab(b.dataset.t));
+function showTab(t){tab=t;document.querySelectorAll('.tabs [data-t]').forEach(b=>b.classList.toggle('on',b.dataset.t===t));$('#p-aj').classList.toggle('hide',t!=='aj');$('#p-lg').classList.toggle('hide',t!=='lg');if(t==='lg')refreshLogs()}
+function renderLogs(arr){const b=$('#logbox');b.innerHTML=arr.map(x=>'<span class="t">'+esc(x.t)+'</span> <span class="'+x.l+'">['+x.l+'] '+esc(x.m)+'</span>').join('\n');b.scrollTop=b.scrollHeight}
+async function refreshLogs(){
+  if(src==='app')return renderLogs(LOG);
+  try{const r=await fetch(base()+'/logs?n=300',{headers:hdr()});renderLogs((await r.json()).logs)}catch(e){$('#logbox').textContent='Servidor inacessível: '+e.message}
+}
+$('#sA').onclick=()=>{src='app';$('#sA').classList.add('on');refreshLogs()};
+$('#sS').onclick=()=>{src='srv';refreshLogs()};
+$('#cl').onclick=()=>{LOG=[];renderLogs(LOG)};
+setInterval(()=>{if(isLogs()&&src==='srv')refreshLogs()},2500);
+
+/* três dedos na tela = abre/fecha configurações */
+let last3=0;
+addEventListener('touchstart',e=>{if(e.touches.length>=3&&Date.now()-last3>700){last3=Date.now();toggleSettings()}},{passive:true});
+addEventListener('keydown',e=>{if(e.key==='ContextMenu'||e.key==='F1'){e.preventDefault();toggleSettings()}if(e.key==='Escape')jjBack()});
+
+/* ---------- boot ---------- */
+function greet(){add('a','Olá, '+esc(S.user)+'. J.J. online e às ordens.\nToque com 3 dedos (ou botão MENU do controle) para abrir as configurações.')}
+if(H.length){H.forEach(m=>m.role==='user'?add('u',m.content,1):add('a',md(m.content)))}else greet();
+health();
+</script></body></html>
