@@ -11,3 +11,5 @@ App Android (TV/tablet/celular, WebView) + backend agêntico com **openai/gpt-os
 APK: aba **Actions > Build JJ APK > Run workflow**; baixe o artifact `JJ-apk`.
 
 Obs.: o workflow usa o Android SDK que já vem no runner `ubuntu-latest` (sem `setup-android`). Para o `Kaggle` publicar o `.github/workflows` o token precisa da permissão **workflow** (classic) ou **Workflows: Read and write** (fine-grained).
+
+O app descobre o Gateway por um aviso em `ntfy.sh` (topico derivado do token) e, como reserva, pelo `Gateway.md` do vault. Para o vault sincronizar use um token **classic** com escopo `repo` (tokens fine-grained nao conseguem criar o repositorio `JJ-Vault`; crie-o antes como privado).

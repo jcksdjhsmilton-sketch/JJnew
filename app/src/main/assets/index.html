@@ -306,6 +306,13 @@ async function kStatus(){
     if(r.status!==200)jlog('INFO','Kaggle status HTTP '+r.status+' '+String(r.body).slice(0,120));
     if(r.status===200){try{return String(JSON.parse(r.body).status||'').toLowerCase()}catch(e){}}}
   return ''}
+const topic=()=>'jjgw-'+String(S.token).replace(/[^A-Za-z0-9_-]/g,'_').slice(0,50);
+async function gwFromNtfy(){
+  try{const r=await http('GET','https://ntfy.sh/'+topic()+'/json?poll=1&since=all',{'User-Agent':'JJ'});if(r.status!==200)return '';
+    const msgs=r.body.split('\n').filter(Boolean).map(l=>{try{return JSON.parse(l)}catch(e){return null}}).filter(m=>m&&m.event==='message');
+    const last=msgs.length?String(msgs[msgs.length-1].message||''):'';const m=last.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);return m?m[0]:''}
+  catch(e){return ''}}
+async function gwFind(){return (await gwFromNtfy())||(await gwFromGithub())}
 async function gwFromGithub(){
   const r=await http('GET','https://api.github.com/repos/'+S.ghUser.trim()+'/'+S.vault.trim()+'/contents/Gateway.md',{'Authorization':'Bearer '+S.ghToken.trim(),'Accept':'application/vnd.github.raw+json','User-Agent':'JJ','X-GitHub-Api-Version':'2022-11-28'});
   if(r.status!==200)return '';const m=r.body.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);return m?m[0]:''}
@@ -318,7 +325,7 @@ async function ligarJJ(){
   try{
     if(!S.token){S.token=rndTok();saveS()}
     setSt('LIGANDO…','think');cap('Procurando o servidor…');
-    let url=await gwFromGithub();
+    let url=await gwFind();
     if(url&&await ping(url))return conectar(url);
     const st=await kStatus();
     if(st.includes('running')||st.includes('queued')){jlog('INFO','Kaggle: sessão já em andamento ('+st+'), aguardando…')}
@@ -335,7 +342,7 @@ async function ligarJJ(){
     for(let i=0;i<110;i++){
       const sec=Math.round((Date.now()-t0)/1000);
       cap('Ligando o servidor no Kaggle… '+sec+'s'+(ks?' · Kaggle: '+(nome[ks]||ks):''));await sleep(4000);
-      url=await gwFromGithub();if(url&&await ping(url))return conectar(url);
+      url=await gwFind();if(url&&await ping(url))return conectar(url);
       if(i%4===3){try{ks=(await kStatus()).split('.').pop()}catch(e){}
         if(sec>60&&(ks==='error'||ks==='complete'||ks.startsWith('cancel')))throw new Error('O kernel jj-server parou no Kaggle ('+ks+'). Abra kaggle.com/code/'+S.kaggleUser.trim()+'/'+SLUG+' e veja o log.')}}
     throw new Error('Tempo esgotado (7 min). Abra o kernel jj-server no Kaggle e veja o log.')

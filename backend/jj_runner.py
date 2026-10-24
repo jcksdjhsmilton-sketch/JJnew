@@ -3,7 +3,7 @@ Usado pelo botao "Ligar JJ" do app (script enviado ao Kaggle) e pela celula 2 do
 Configuracao por variaveis de ambiente: GITHUB_TOKEN, GROQ_API_KEY, JJ_TOKEN, GITHUB_USER,
 VAULT_NAME, JJ_TZ, JJ_IDLE_MIN (minutos sem pedidos ate desligar; 90 por padrao).
 Quando o servidor encerra (ociosidade ou /shutdown) este script termina e libera a sessao do Kaggle."""
-import os, sys, re, time, secrets, subprocess, urllib.request
+import os, sys, re, time, secrets, subprocess, urllib.request, urllib.error
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.dirname(HERE)
@@ -18,6 +18,8 @@ VAULT_NAME = os.environ.get("VAULT_NAME") or "JJ-Vault"
 TOKEN = os.environ.get("JJ_TOKEN") or secrets.token_urlsafe(18)
 PORT = os.environ.get("PORT", "8000")
 VAULT = os.environ.get("JJ_VAULT", W + "/JJ_Vault")
+# canal de aviso independente do GitHub: o app le o ultimo aviso deste topico (nome derivado do JJ_TOKEN)
+TOPIC = "jjgw-" + re.sub(r"[^A-Za-z0-9_-]", "_", TOKEN)[:50]
 
 
 def say(*a):
@@ -44,6 +46,29 @@ def publish(text):
         time.sleep(3)
     say("Aviso: nao consegui enviar Gateway.md:", out[:200])
     return False
+
+
+def ntfy(msg):
+    try:
+        req = urllib.request.Request("https://ntfy.sh/" + TOPIC, data=msg.encode(), method="POST", headers={"Title": "JJ Gateway"})
+        urllib.request.urlopen(req, timeout=15)
+        return True
+    except Exception as e:
+        say("Aviso: ntfy falhou:", e)
+        return False
+
+
+def diagnose():
+    """Explica por que o GitHub recusou: token invalido, sem permissao ou repositorio do vault inexistente."""
+    for path in ("/user", f"/repos/{USER}/{VAULT_NAME}"):
+        try:
+            req = urllib.request.Request("https://api.github.com" + path, headers={"Authorization": "Bearer " + GH, "User-Agent": "JJ"})
+            r = urllib.request.urlopen(req, timeout=15)
+            say(f"[diag] GET {path} -> {r.status} escopos={r.headers.get('X-OAuth-Scopes')}")
+        except urllib.error.HTTPError as e:
+            say(f"[diag] GET {path} -> HTTP {e.code} escopos={e.headers.get('X-OAuth-Scopes')}")
+        except Exception as e:
+            say("[diag]", path, e)
 
 
 CORE = {"fastapi": "fastapi", "uvicorn": "uvicorn", "requests": "requests", "numpy": "numpy", "tzdata": "tzdata"}
@@ -112,8 +137,14 @@ def main():
     if os.environ.get("JJ_PRINT_TOKEN") == "1":
         say("Token  :", TOKEN)
     say("Desliga sozinho apos", os.environ.get("JJ_IDLE_MIN", "90"), "min sem pedidos.")
-    ok = publish(f"# Gateway do JJ\n\nAtualizado: {time.strftime('%Y-%m-%d %H:%M')}\n\n{url}\n")
-    say("Gateway publicado no vault." if ok else "Gateway NAO publicado (cole manualmente no app).")
+    say("Aviso enviado ao app (ntfy)." if ntfy(url) else "Aviso ntfy NAO enviado.")
+
+    def pub_vault():
+        ok = publish(f"# Gateway do JJ\n\nAtualizado: {time.strftime('%Y-%m-%d %H:%M')}\n\n{url}\n")
+        say("Gateway publicado no vault." if ok else "Gateway NAO publicado no vault (nao impede o app de conectar).")
+        if not ok:
+            diagnose()
+    threading.Thread(target=pub_vault, daemon=True).start()
     # extras em segundo plano: busca na web, PDF, RAG. Sem fastembed o RAG usa TF-IDF
     threading.Thread(target=lambda: (pip(missing(LATER)), pip(missing({"fastembed": "fastembed"}))), daemon=True).start()
 
@@ -126,6 +157,7 @@ def main():
             p.terminate()
         except Exception:
             pass
+    ntfy("OFFLINE")
     publish(f"# Gateway do JJ\n\nOFFLINE desde {time.strftime('%Y-%m-%d %H:%M')}\n")
 
 
