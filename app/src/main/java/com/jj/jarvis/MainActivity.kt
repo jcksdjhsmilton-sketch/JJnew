@@ -139,6 +139,31 @@ class MainActivity : Activity() {
         }
         @JavascriptInterface fun stopSpeak() { runOnUiThread { tts?.stop(); js("onSpeak('end')") } }
         @JavascriptInterface fun location() { runOnUiThread { fetchLocation() } }
+        // HTTP nativo (sem CORS): usado para falar com a API do Kaggle e do GitHub
+        @JavascriptInterface fun http(id: Int, method: String, url: String, headers: String, body: String) {
+            Thread {
+                var status = 0
+                var text = ""
+                try {
+                    val c = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                    c.requestMethod = method
+                    c.connectTimeout = 20000
+                    c.readTimeout = 40000
+                    val h = JSONObject(headers)
+                    for (k in h.keys()) c.setRequestProperty(k, h.getString(k))
+                    if (body.isNotEmpty()) {
+                        c.doOutput = true
+                        c.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                    }
+                    status = c.responseCode
+                    val st = if (status >= 400) c.errorStream else c.inputStream
+                    text = st?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+                } catch (e: Exception) {
+                    text = e.message ?: e.toString()
+                }
+                js("onHttp($id,$status,${JSONObject.quote(text)})")
+            }.start()
+        }
     }
 
     @Suppress("DEPRECATION")

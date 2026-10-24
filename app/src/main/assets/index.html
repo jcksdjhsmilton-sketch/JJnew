@@ -88,7 +88,7 @@ button:focus,input:focus,textarea:focus,.nt:focus{outline:none;border-color:var(
 
 <script>
 const $=s=>document.querySelector(s),esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');
-const DEF={gateway:'',token:'',groqKey:'',model:'openai/gpt-oss-120b',reasoning:'low',temp:0.3,steps:15,user:'Chefe',extra:'',speak:true,loop:false,lat:-23.55,lon:-46.63,city:'São Paulo'};
+const DEF={gateway:'',token:'',groqKey:'',kaggleUser:'',kaggleKey:'',ghUser:'',ghToken:'',repo:'JJnew',vault:'JJ-Vault',idle:90,auto:false,model:'openai/gpt-oss-120b',reasoning:'low',temp:0.3,steps:15,user:'Chefe',extra:'',speak:true,loop:false,lat:-23.55,lon:-46.63,city:'São Paulo'};
 const ld=(k,d)=>{try{return JSON.parse(localStorage.getItem(k))??d}catch(e){return d}};
 let S=Object.assign({},DEF,ld('jj_s',{})),H=ld('jj_h',[]),LOG=[],tab='aj',src='app',busy=false,mode='idle',rms=0,WX='';
 if(/llama/i.test(S.model))S.model=DEF.model;
@@ -191,7 +191,7 @@ $('#mic').onclick=listen;
 const brief=a=>String(a.command||a.query||a.url||a.path||a.source||a.code||JSON.stringify(a)).replace(/\s+/g,' ').slice(0,90);
 async function send(txt){
   txt=txt.trim();if(busy||!txt)return;
-  if(!base()){cap('Configure o gateway: 3 dedos (ou MENU) → Ajustes.');qErr('Configure o gateway nos ajustes.');openSet();return}
+  if(!base()){if(hasCreds()){ligarJJ();return}cap('Configure os ajustes: 3 dedos (ou MENU).');qErr('Configure os ajustes.');openSet();return}
   busy=true;$('#go').disabled=true;H.push({role:'user',content:txt});saveH();cap(txt,1);renderQ();setSt('PENSANDO…','think');jlog('INFO','→ '+txt);
   let fin=null;
   const onEv=e=>{
@@ -216,7 +216,7 @@ $('#in').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();$
 
 async function health(){
   if(!base()){setSt('SEM GATEWAY','err');return false}
-  try{const r=await fetch(base()+'/health',{headers:hdr()});if(!r.ok)throw new Error('HTTP '+r.status);const j=await r.json();if(!busy)setSt('ONLINE','idle');jlog('INFO','Servidor OK: '+j.time);brain();return true}
+  try{const r=await fetch(base()+'/health',{headers:hdr()});if(!r.ok)throw new Error('HTTP '+r.status);const j=await r.json();if(!busy)setSt('ONLINE','idle');jlog('INFO','Servidor OK: '+j.time+(j.idle_left!=null?' · desliga em '+Math.max(0,Math.round(j.idle_left/60))+' min sem uso':''));brain();return true}
   catch(e){setSt('OFFLINE','err');jlog('ERROR','health: '+e.message);return false}}
 
 /* ---------- segundo cérebro (Obsidian) ---------- */
@@ -235,9 +235,12 @@ async function openNote(n){$('#ntitle').textContent=n.title.toUpperCase();$('#nb
 $('#nx').onclick=()=>$('#note').classList.add('hide');
 
 /* ---------- configurações ---------- */
-const FIELDS=[['gateway','Gateway (URL do túnel do Kaggle)','text'],['token','Token de acesso (JJ_TOKEN)','password'],['groqKey','Groq API Key','password'],['model','Modelo Groq','text'],['reasoning','Raciocínio do modelo (low, medium, high)','text'],['temp','Temperatura (0 a 1)','number'],['steps','Máximo de passos do agente','number'],['user','Como te chamar','text'],['extra','Instruções extras para o system prompt','textarea'],['speak','Falar as respostas em voz alta','checkbox'],['loop','Conversa contínua (volta a ouvir depois de falar)','checkbox'],['city','Cidade padrão do clima (se a localização falhar)','text'],['lat','Latitude padrão','number'],['lon','Longitude padrão','number']];
+const FIELDS=[['groqKey','Groq API Key','password'],['kaggleUser','Kaggle: usuário','text'],['kaggleKey','Kaggle: API key (kaggle.json > key)','password'],['ghUser','GitHub: usuário','text'],['ghToken','GitHub: token (permissão repo)','password'],['repo','GitHub: repositório do JJ','text'],['vault','GitHub: repositório do vault Obsidian','text'],['idle','Desligar o servidor após quantos min sem pedidos à IA (0 = nunca)','number'],['auto','Ligar o JJ sozinho ao abrir o app (se estiver offline)','checkbox'],['gateway','Gateway (preenchido sozinho ao ligar)','text'],['token','Token de acesso (gerado sozinho)','password'],['model','Modelo Groq','text'],['reasoning','Raciocínio do modelo (low, medium, high)','text'],['temp','Temperatura (0 a 1)','number'],['steps','Máximo de passos do agente','number'],['user','Como te chamar','text'],['extra','Instruções extras para o system prompt','textarea'],['speak','Falar as respostas em voz alta','checkbox'],['loop','Conversa contínua (volta a ouvir depois de falar)','checkbox'],['city','Cidade padrão do clima (se a localização falhar)','text'],['lat','Latitude padrão','number'],['lon','Longitude padrão','number']];
 function buildSettings(){
   const p=$('#p-aj');p.innerHTML='';
+  const r0=document.createElement('div');r0.className='row';
+  [['LIGAR JJ',()=>{closeSet();ligarJJ()}],['DESLIGAR JJ',()=>{closeSet();desligarJJ()}]].forEach(([n,f])=>{const b=document.createElement('button');b.textContent=n;b.onclick=f;r0.appendChild(b)});
+  p.appendChild(r0);
   FIELDS.forEach(([k,l,t])=>{const w=document.createElement('div');w.className='f'+(t==='checkbox'?' chk':'');
     const i=document.createElement(t==='textarea'?'textarea':'input');if(t!=='textarea')i.type=t;if(t==='number')i.step='any';
     if(t==='checkbox')i.checked=!!S[k];else i.value=S[k];
@@ -270,6 +273,70 @@ addEventListener('keydown',e=>{
   else if(e.key==='F2'||(e.key==='c'&&e.ctrlKey)){e.preventDefault();toggleChat()}
   else if((e.key==='Enter'||e.key===' ')&&document.activeElement===document.body&&!isOpen('#set')&&!isOpen('#note')){e.preventDefault();listen()}});
 
+/* ---------- ligar o JJ sozinho (Kaggle + GitHub) ---------- */
+const SLUG='jj-server',sleep=ms=>new Promise(r=>setTimeout(r,ms));let starting=false;
+const HP={};let hid=0;
+function http(method,url,headers,body){return new Promise((res,rej)=>{
+  if(window.JJ&&JJ.http){const id=++hid;HP[id]=res;JJ.http(id,method,url,JSON.stringify(headers||{}),body||'')}
+  else fetch(url,{method,headers,body:body||undefined}).then(async r=>res({status:r.status,body:await r.text()})).catch(rej)})}
+window.onHttp=(id,status,body)=>{const f=HP[id];delete HP[id];if(f)f({status,body})};
+const rndTok=()=>{const a=new Uint8Array(18);crypto.getRandomValues(a);return Array.from(a,b=>b.toString(36).padStart(2,'0')).join('').slice(0,24)};
+const hasCreds=()=>['kaggleUser','kaggleKey','ghUser','ghToken','groqKey'].every(k=>String(S[k]||'').trim());
+const kHdr=()=>({'Authorization':'Basic '+btoa(S.kaggleUser.trim()+':'+S.kaggleKey.trim()),'Content-Type':'application/json','Accept':'application/json','User-Agent':'JJ'});
+function kaggleScript(){
+  const q=JSON.stringify,tz=(()=>{try{return Intl.DateTimeFormat().resolvedOptions().timeZone||'America/Sao_Paulo'}catch(e){return 'America/Sao_Paulo'}})();
+  const env=[['GITHUB_TOKEN',S.ghToken.trim()],['GROQ_API_KEY',S.groqKey.trim()],['JJ_TOKEN',S.token],['GITHUB_USER',S.ghUser.trim()],['JJ_REPO',S.repo.trim()],['VAULT_NAME',S.vault.trim()],['JJ_IDLE_MIN',String(+S.idle||0)],['JJ_TZ',tz]];
+  return ['import os, runpy, subprocess',
+    'os.environ.update({'+env.map(([k,v])=>q(k)+':'+q(v)).join(', ')+'})',
+    'os.makedirs("/kaggle/working", exist_ok=True); os.chdir("/kaggle/working")',
+    'subprocess.run("rm -rf JJ_src", shell=True)',
+    'u = "https://x-access-token:%s@github.com/%s/%s.git" % (os.environ["GITHUB_TOKEN"], os.environ["GITHUB_USER"], os.environ["JJ_REPO"])',
+    'r = subprocess.run(["git", "clone", "-q", "--depth", "1", u, "JJ_src"], capture_output=True, text=True)',
+    'assert r.returncode == 0, "clone falhou: " + r.stderr.replace(os.environ["GITHUB_TOKEN"], "***")',
+    'runpy.run_path("JJ_src/backend/jj_runner.py", run_name="__main__")'].join('\n')}
+async function kStatus(){
+  const u=S.kaggleUser.trim();
+  for(const url of ['https://www.kaggle.com/api/v1/kernels/status?userName='+u+'&kernelSlug='+SLUG,'https://www.kaggle.com/api/v1/kernels/status/'+u+'/'+SLUG]){
+    const r=await http('GET',url,kHdr());
+    if(r.status===401||r.status===403)throw new Error('Kaggle recusou usuário/key (HTTP '+r.status+')');
+    if(r.status===200){try{return String(JSON.parse(r.body).status||'').toLowerCase()}catch(e){}}}
+  return ''}
+async function gwFromGithub(){
+  const r=await http('GET','https://api.github.com/repos/'+S.ghUser.trim()+'/'+S.vault.trim()+'/contents/Gateway.md',{'Authorization':'Bearer '+S.ghToken.trim(),'Accept':'application/vnd.github.raw+json','User-Agent':'JJ','X-GitHub-Api-Version':'2022-11-28'});
+  if(r.status!==200)return '';const m=r.body.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);return m?m[0]:''}
+async function ping(url){try{return (await http('GET',url+'/health',{'X-JJ-Token':S.token,'User-Agent':'JJ'})).status===200}catch(e){return false}}
+function conectar(url){S.gateway=url;saveS();jlog('INFO','Gateway: '+url);setSt('ONLINE','idle');cap('JJ ligado. Gateway atualizado sozinho.');health()}
+async function ligarJJ(){
+  if(starting)return;
+  if(!hasCreds()){cap('Preencha nos Ajustes: Groq, Kaggle (usuário e key) e GitHub (usuário e token).');qErr('Faltam dados nos ajustes.');openSet();return}
+  starting=true;
+  try{
+    if(!S.token){S.token=rndTok();saveS()}
+    setSt('LIGANDO…','think');cap('Procurando o servidor…');
+    let url=await gwFromGithub();
+    if(url&&await ping(url))return conectar(url);
+    const st=await kStatus();
+    if(st.includes('running')||st.includes('queued')){jlog('INFO','Kaggle: sessão já em andamento ('+st+'), aguardando…')}
+    else{
+      cap('Enviando o JJ ao Kaggle…');
+      const body={slug:S.kaggleUser.trim()+'/'+SLUG,newTitle:'JJ Server',text:kaggleScript(),language:'python',kernelType:'script',isPrivate:true,enableGpu:false,enableInternet:true,datasetDataSources:[],competitionDataSources:[],kernelDataSources:[],modelDataSources:[],categoryIds:[]};
+      const r=await http('POST','https://www.kaggle.com/api/v1/kernels/push',kHdr(),JSON.stringify(body));
+      let j={};try{j=JSON.parse(r.body)}catch(e){}
+      if(r.status===401||r.status===403)throw new Error('Kaggle recusou usuário/key (HTTP '+r.status+')');
+      if(r.status!==200||j.error)throw new Error('Kaggle push: '+(j.error||('HTTP '+r.status+' '+String(r.body).slice(0,160))));
+      jlog('INFO','Kaggle: enviado '+(j.ref||j.url||'')+' v'+(j.versionNumber||'?'))}
+    for(let i=0;i<70;i++){
+      cap('Ligando o servidor no Kaggle… '+Math.round((i+1)*6)+'s');await sleep(6000);
+      url=await gwFromGithub();if(url&&await ping(url))return conectar(url)}
+    throw new Error('Tempo esgotado (7 min). Abra o kernel jj-server no Kaggle e veja o log.')
+  }catch(e){jlog('ERROR','ligar: '+e.message);cap('Falha ao ligar: '+e.message);qErr('Falha ao ligar: '+e.message);setSt('ERRO','err')}
+  finally{starting=false}}
+async function desligarJJ(){
+  if(!base()){cap('Nenhum servidor conectado.');return}
+  try{const r=await fetch(base()+'/shutdown',{method:'POST',headers:hdr()});cap(r.ok?'JJ desligado. Toque em OFFLINE para ligar de novo.':'Falha ao desligar: HTTP '+r.status);setSt('OFFLINE','err')}
+  catch(e){cap('Falha ao desligar: '+e.message)}}
+$('#st').onclick=()=>{if(/OFFLINE|SEM GATEWAY|ERRO/.test($('#st').textContent))ligarJJ()};
+
 /* ---------- boot ---------- */
-setSt('CONECTANDO…','idle');cap('Olá, '+S.user+'. J.J. online e às ordens. Toque no orbe para falar.');renderQ();health();
+setSt('CONECTANDO…','idle');cap('Olá, '+S.user+'. J.J. online e às ordens. Toque no orbe para falar.');renderQ();health().then(ok=>{if(!ok&&S.auto&&hasCreds())ligarJJ()});
 </script></body></html>

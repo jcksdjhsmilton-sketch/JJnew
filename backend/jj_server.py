@@ -14,6 +14,13 @@ RAG_FILE = HOME + "/.jj_rag.pkl"
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 LOGS = collections.deque(maxlen=1000)
 CWD = HOME
+IDLE_MIN = float(os.environ.get("JJ_IDLE_MIN", "90") or 0)  # desliga sozinho apos N min sem pedidos ao /chat (0 = nunca)
+LAST_ACTIVE = time.time()
+
+
+def touch():
+    global LAST_ACTIVE
+    LAST_ACTIVE = time.time()
 DIAS = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
 
 
@@ -422,7 +429,7 @@ def _vault_sh(cmd):
 
 
 def _push():
-    log("INFO", "Vault sync: " + _vault_sh('git add -A; git commit -qm "JJ sync"; git push -q -u origin main')[:200])
+    log("INFO", "Vault sync: " + _vault_sh('git add -A; git commit -qm "JJ sync"; git pull -q --rebase --autostash origin main; git push -q -u origin main')[:200])
 
 
 def _vault_dirty():
@@ -748,15 +755,51 @@ def auth(req: Request):
 @app.get("/health")
 def health(req: Request):
     auth(req)
-    return {"ok": True, "name": "JJ", "cwd": CWD, "time": t_get_datetime()}
+    left = int(IDLE_MIN * 60 - (time.time() - LAST_ACTIVE)) if IDLE_MIN > 0 else None
+    return {"ok": True, "name": "JJ", "cwd": CWD, "time": t_get_datetime(), "idle_left": left}
 
 
 @app.post("/chat")
 async def chat(req: Request):
     auth(req)
     body = await req.json()
-    return StreamingResponse(agent(body), media_type="application/x-ndjson",
+    touch()
+
+    def touching(gen):  # qualquer evento do agente conta como atividade
+        try:
+            for x in gen:
+                touch()
+                yield x
+        finally:
+            touch()
+    return StreamingResponse(touching(agent(body)), media_type="application/x-ndjson",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+def _shutdown(why):
+    log("INFO", f"Desligando: {why}")
+    try:
+        if _push_timer:
+            _push_timer.cancel()
+        if GH_TOKEN and VAULT_REPO:
+            _push()
+    except Exception as e:
+        print("push final falhou:", e, flush=True)
+    os._exit(0)
+
+
+@app.post("/shutdown")
+def shutdown(req: Request):
+    auth(req)
+    threading.Timer(1.0, _shutdown, args=("pedido do app",)).start()
+    return {"ok": True}
+
+
+def _idle_watch():
+    while True:
+        time.sleep(30)
+        if IDLE_MIN > 0 and time.time() - LAST_ACTIVE > IDLE_MIN * 60:
+            _shutdown(f"{IDLE_MIN:g} min sem pedidos para a IA")
 
 
 @app.get("/logs")
@@ -791,5 +834,8 @@ if __name__ == "__main__":
     if os.environ.get("JJ_SEED", "1") != "0":
         _SEED["running"] = True
         threading.Thread(target=_seed_run, daemon=True).start()
-    log("INFO", f"JJ online | HOME={HOME} | TZ={TZ} | auth={'on' if TOKEN else 'OFF'}")
+    touch()
+    if IDLE_MIN > 0:
+        threading.Thread(target=_idle_watch, daemon=True).start()
+    log("INFO", f"JJ online | idle-off={IDLE_MIN:g}min | HOME={HOME} | TZ={TZ} | auth={'on' if TOKEN else 'OFF'}")
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)), log_level="warning")
