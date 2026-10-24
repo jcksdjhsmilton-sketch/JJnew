@@ -282,7 +282,12 @@ function http(method,url,headers,body){return new Promise((res,rej)=>{
 window.onHttp=(id,status,body)=>{const f=HP[id];delete HP[id];if(f)f({status,body})};
 const rndTok=()=>{const a=new Uint8Array(18);crypto.getRandomValues(a);return Array.from(a,b=>b.toString(36).padStart(2,'0')).join('').slice(0,24)};
 const hasCreds=()=>['kaggleUser','kaggleKey','ghUser','ghToken','groqKey'].every(k=>String(S[k]||'').trim());
-const kHdr=()=>({'Authorization':'Basic '+btoa(S.kaggleUser.trim()+':'+S.kaggleKey.trim()),'Content-Type':'application/json','Accept':'application/json','User-Agent':'JJ'});
+const kHdr=bearer=>({'Authorization':bearer?'Bearer '+S.kaggleKey.trim():'Basic '+btoa(S.kaggleUser.trim()+':'+S.kaggleKey.trim()),'Content-Type':'application/json','Accept':'application/json','User-Agent':'JJ'});
+/* tenta Basic (kaggle.json) e Bearer (token novo KGAT_); a ordem depende do formato da key */
+async function kReq(method,url,body){
+  const order=/^KGAT_/i.test(S.kaggleKey.trim())?[true,false]:[false,true];let r;
+  for(const b of order){r=await http(method,url,kHdr(b),body);if(r.status!==401&&r.status!==403)return r}
+  return r}
 function kaggleScript(){
   const q=JSON.stringify,tz=(()=>{try{return Intl.DateTimeFormat().resolvedOptions().timeZone||'America/Sao_Paulo'}catch(e){return 'America/Sao_Paulo'}})();
   const env=[['GITHUB_TOKEN',S.ghToken.trim()],['GROQ_API_KEY',S.groqKey.trim()],['JJ_TOKEN',S.token],['GITHUB_USER',S.ghUser.trim()],['JJ_REPO',S.repo.trim()],['VAULT_NAME',S.vault.trim()],['JJ_IDLE_MIN',String(+S.idle||0)],['JJ_TZ',tz]];
@@ -297,8 +302,8 @@ function kaggleScript(){
 async function kStatus(){
   const u=S.kaggleUser.trim();
   for(const url of ['https://www.kaggle.com/api/v1/kernels/status?userName='+u+'&kernelSlug='+SLUG,'https://www.kaggle.com/api/v1/kernels/status/'+u+'/'+SLUG]){
-    const r=await http('GET',url,kHdr());
-    if(r.status===401||r.status===403)throw new Error('Kaggle recusou usuário/key (HTTP '+r.status+')');
+    const r=await kReq('GET',url);
+    jlog('INFO','Kaggle status HTTP '+r.status+' '+String(r.body).slice(0,120));
     if(r.status===200){try{return String(JSON.parse(r.body).status||'').toLowerCase()}catch(e){}}}
   return ''}
 async function gwFromGithub(){
@@ -320,9 +325,9 @@ async function ligarJJ(){
     else{
       cap('Enviando o JJ ao Kaggle…');
       const body={slug:S.kaggleUser.trim()+'/'+SLUG,newTitle:'JJ Server',text:kaggleScript(),language:'python',kernelType:'script',isPrivate:true,enableGpu:false,enableInternet:true,datasetDataSources:[],competitionDataSources:[],kernelDataSources:[],modelDataSources:[],categoryIds:[]};
-      const r=await http('POST','https://www.kaggle.com/api/v1/kernels/push',kHdr(),JSON.stringify(body));
+      const r=await kReq('POST','https://www.kaggle.com/api/v1/kernels/push',JSON.stringify(body));
       let j={};try{j=JSON.parse(r.body)}catch(e){}
-      if(r.status===401||r.status===403)throw new Error('Kaggle recusou usuário/key (HTTP '+r.status+')');
+      if(r.status===401||r.status===403)throw new Error('Kaggle recusou (HTTP '+r.status+'). Confira usuário exato e a key. Resposta: '+String(r.body).slice(0,200));
       if(r.status!==200||j.error)throw new Error('Kaggle push: '+(j.error||('HTTP '+r.status+' '+String(r.body).slice(0,160))));
       jlog('INFO','Kaggle: enviado '+(j.ref||j.url||'')+' v'+(j.versionNumber||'?'))}
     for(let i=0;i<70;i++){
