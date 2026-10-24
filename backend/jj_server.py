@@ -169,8 +169,13 @@ GH_TOKEN, VAULT_REPO = os.environ.get("GITHUB_TOKEN", ""), os.environ.get("VAULT
 _EMB, _DB, _BC, _push_timer = None, None, {}, None
 
 
+_EMB_FAIL = 0.0
+
+
 def _embed(texts):
-    global _EMB
+    global _EMB, _EMB_FAIL
+    if _EMB is False and time.time() - _EMB_FAIL > 180:  # fastembed pode ter sido instalado depois do boot
+        _EMB = None
     if _EMB is None:
         try:
             from fastembed import TextEmbedding
@@ -179,6 +184,7 @@ def _embed(texts):
         except Exception as e:
             log("WARN", f"Embeddings indisponiveis ({e}); usando so TF-IDF")
             _EMB = False
+            _EMB_FAIL = time.time()
     if not _EMB or not texts:
         return None
     v = np.array(list(_EMB.embed(texts, batch_size=32)), dtype="float32")

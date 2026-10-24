@@ -46,9 +46,32 @@ def publish(text):
     return False
 
 
+CORE = {"fastapi": "fastapi", "uvicorn": "uvicorn", "requests": "requests", "numpy": "numpy", "tzdata": "tzdata"}
+# o servidor carrega estes sob demanda: instalamos DEPOIS de ficar online, sem atrasar o boot
+LATER = {"sklearn": "scikit-learn", "bs4": "beautifulsoup4", "pypdf": "pypdf", "trafilatura": "trafilatura", "ddgs": "ddgs"}
+
+
+def missing(pkgs):
+    import importlib.util
+    return [pkg for mod, pkg in pkgs.items() if importlib.util.find_spec(mod) is None]
+
+
+def pip(pkgs):
+    if pkgs:
+        say("[runner] pip install", " ".join(pkgs))
+        sh(f"{sys.executable} -m pip -q --disable-pip-version-check install " + " ".join(pkgs))
+
+
 def main():
-    say("[runner] instalando dependencias...")
-    sh("pip -q install fastapi uvicorn requests ddgs trafilatura beautifulsoup4 scikit-learn pypdf tzdata fastembed numpy")
+    import threading
+    t0 = time.time()
+    # baixa o cloudflared em paralelo com a instalacao das dependencias
+    def get_tunnel_bin():
+        if not os.path.exists("cloudflared"):
+            sh("wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O cloudflared && chmod +x cloudflared")
+    dl = threading.Thread(target=get_tunnel_bin)
+    dl.start()
+    pip(missing(CORE))  # o Kaggle ja traz quase tudo; instala so o que falta para abrir
 
     env = dict(os.environ, JJ_TOKEN=TOKEN, JJ_HOME=W, PORT=PORT, GITHUB_TOKEN=GH, GROQ_API_KEY=GROQ,
                VAULT_REPO=f"{USER}/{VAULT_NAME}" if USER else "", JJ_TZ=os.environ.get("JJ_TZ", "America/Sao_Paulo"),
@@ -56,8 +79,7 @@ def main():
     server = subprocess.Popen([sys.executable, HERE + "/jj_server.py"], env=env,
                               stdout=open("server.log", "w"), stderr=subprocess.STDOUT)
 
-    if not os.path.exists("cloudflared"):
-        sh("wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O cloudflared && chmod +x cloudflared")
+    dl.join()
     tun = subprocess.Popen(["./cloudflared", "tunnel", "--url", f"http://localhost:{PORT}", "--no-autoupdate"],
                            stdout=open("tunnel.log", "w"), stderr=subprocess.STDOUT)
     url = None
@@ -73,7 +95,7 @@ def main():
         sys.exit(1)
 
     # espera o servidor (o vault e preparado antes de ele abrir a porta)
-    for _ in range(150):
+    for _ in range(300):
         try:
             req = urllib.request.Request(f"http://localhost:{PORT}/health", headers={"X-JJ-Token": TOKEN})
             urllib.request.urlopen(req, timeout=3)
@@ -83,15 +105,17 @@ def main():
                 say("[runner] servidor caiu ao iniciar. server.log:\n" + open("server.log").read()[-1500:])
                 tun.terminate()
                 sys.exit(1)
-            time.sleep(2)
+            time.sleep(1)
 
-    say("\n=== JJ ONLINE ===")
+    say("\n=== JJ ONLINE ===", f"(subiu em {time.time() - t0:.0f}s)")
     say("Gateway:", url)
     if os.environ.get("JJ_PRINT_TOKEN") == "1":
         say("Token  :", TOKEN)
     say("Desliga sozinho apos", os.environ.get("JJ_IDLE_MIN", "90"), "min sem pedidos.")
     ok = publish(f"# Gateway do JJ\n\nAtualizado: {time.strftime('%Y-%m-%d %H:%M')}\n\n{url}\n")
     say("Gateway publicado no vault." if ok else "Gateway NAO publicado (cole manualmente no app).")
+    # extras em segundo plano: busca na web, PDF, RAG. Sem fastembed o RAG usa TF-IDF
+    threading.Thread(target=lambda: (pip(missing(LATER)), pip(missing({"fastembed": "fastembed"}))), daemon=True).start()
 
     while server.poll() is None and tun.poll() is None:
         time.sleep(5)

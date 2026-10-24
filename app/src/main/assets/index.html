@@ -303,7 +303,7 @@ async function kStatus(){
   const u=S.kaggleUser.trim();
   for(const url of ['https://www.kaggle.com/api/v1/kernels/status?userName='+u+'&kernelSlug='+SLUG,'https://www.kaggle.com/api/v1/kernels/status/'+u+'/'+SLUG]){
     const r=await kReq('GET',url);
-    jlog('INFO','Kaggle status HTTP '+r.status+' '+String(r.body).slice(0,120));
+    if(r.status!==200)jlog('INFO','Kaggle status HTTP '+r.status+' '+String(r.body).slice(0,120));
     if(r.status===200){try{return String(JSON.parse(r.body).status||'').toLowerCase()}catch(e){}}}
   return ''}
 async function gwFromGithub(){
@@ -330,9 +330,14 @@ async function ligarJJ(){
       if(r.status===401||r.status===403)throw new Error('Kaggle recusou (HTTP '+r.status+'). Confira usuário exato e a key. Resposta: '+String(r.body).slice(0,200));
       if(r.status!==200||j.error)throw new Error('Kaggle push: '+(j.error||('HTTP '+r.status+' '+String(r.body).slice(0,160))));
       jlog('INFO','Kaggle: enviado '+(j.ref||j.url||'')+' v'+(j.versionNumber||'?'))}
-    for(let i=0;i<70;i++){
-      cap('Ligando o servidor no Kaggle… '+Math.round((i+1)*6)+'s');await sleep(6000);
-      url=await gwFromGithub();if(url&&await ping(url))return conectar(url)}
+    const t0=Date.now();let ks='';
+    const nome={queued:'na fila',running:'rodando',complete:'encerrado',error:'erro'};
+    for(let i=0;i<110;i++){
+      const sec=Math.round((Date.now()-t0)/1000);
+      cap('Ligando o servidor no Kaggle… '+sec+'s'+(ks?' · Kaggle: '+(nome[ks]||ks):''));await sleep(4000);
+      url=await gwFromGithub();if(url&&await ping(url))return conectar(url);
+      if(i%4===3){try{ks=(await kStatus()).split('.').pop()}catch(e){}
+        if(sec>60&&(ks==='error'||ks==='complete'||ks.startsWith('cancel')))throw new Error('O kernel jj-server parou no Kaggle ('+ks+'). Abra kaggle.com/code/'+S.kaggleUser.trim()+'/'+SLUG+' e veja o log.')}}
     throw new Error('Tempo esgotado (7 min). Abra o kernel jj-server no Kaggle e veja o log.')
   }catch(e){jlog('ERROR','ligar: '+e.message);cap('Falha ao ligar: '+e.message);qErr('Falha ao ligar: '+e.message);setSt('ERRO','err')}
   finally{starting=false}}
