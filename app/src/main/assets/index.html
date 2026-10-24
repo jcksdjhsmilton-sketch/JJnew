@@ -318,6 +318,14 @@ async function gwFromGithub(){
   if(r.status!==200)return '';const m=r.body.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);return m?m[0]:''}
 async function ping(url){try{return (await http('GET',url+'/health',{'X-JJ-Token':S.token,'User-Agent':'JJ'})).status===200}catch(e){return false}}
 function conectar(url){S.gateway=url;saveS();jlog('INFO','Gateway: '+url);setSt('ONLINE','idle');cap('JJ ligado. Gateway atualizado sozinho.');health()}
+async function pushKernel(){
+  cap('Enviando o JJ ao Kaggle…');
+  const body={slug:S.kaggleUser.trim()+'/'+SLUG,newTitle:'JJ Server',text:kaggleScript(),language:'python',kernelType:'script',isPrivate:true,enableGpu:false,enableInternet:true,datasetDataSources:[],competitionDataSources:[],kernelDataSources:[],modelDataSources:[],categoryIds:[]};
+  const r=await kReq('POST','https://www.kaggle.com/api/v1/kernels/push',JSON.stringify(body));
+  let j={};try{j=JSON.parse(r.body)}catch(e){}
+  if(r.status===401||r.status===403)throw new Error('Kaggle recusou (HTTP '+r.status+'). Confira usuário exato e a key. Resposta: '+String(r.body).slice(0,200));
+  if(r.status!==200||j.error)throw new Error('Kaggle push: '+(j.error||('HTTP '+r.status+' '+String(r.body).slice(0,160))));
+  jlog('INFO','Kaggle: enviado '+(j.ref||j.url||'')+' v'+(j.versionNumber||'?'))}
 async function ligarJJ(){
   if(starting)return;
   if(!hasCreds()){cap('Preencha nos Ajustes: Groq, Kaggle (usuário e key) e GitHub (usuário e token).');qErr('Faltam dados nos ajustes.');openSet();return}
@@ -327,22 +335,18 @@ async function ligarJJ(){
     setSt('LIGANDO…','think');cap('Procurando o servidor…');
     let url=await gwFind();
     if(url&&await ping(url))return conectar(url);
+    let pushed=false;
     const st=await kStatus();
     if(st.includes('running')||st.includes('queued')){jlog('INFO','Kaggle: sessão já em andamento ('+st+'), aguardando…')}
-    else{
-      cap('Enviando o JJ ao Kaggle…');
-      const body={slug:S.kaggleUser.trim()+'/'+SLUG,newTitle:'JJ Server',text:kaggleScript(),language:'python',kernelType:'script',isPrivate:true,enableGpu:false,enableInternet:true,datasetDataSources:[],competitionDataSources:[],kernelDataSources:[],modelDataSources:[],categoryIds:[]};
-      const r=await kReq('POST','https://www.kaggle.com/api/v1/kernels/push',JSON.stringify(body));
-      let j={};try{j=JSON.parse(r.body)}catch(e){}
-      if(r.status===401||r.status===403)throw new Error('Kaggle recusou (HTTP '+r.status+'). Confira usuário exato e a key. Resposta: '+String(r.body).slice(0,200));
-      if(r.status!==200||j.error)throw new Error('Kaggle push: '+(j.error||('HTTP '+r.status+' '+String(r.body).slice(0,160))));
-      jlog('INFO','Kaggle: enviado '+(j.ref||j.url||'')+' v'+(j.versionNumber||'?'))}
+    else{pushed=true;await pushKernel()}
     const t0=Date.now();let ks='';
     const nome={queued:'na fila',running:'rodando',complete:'encerrado',error:'erro'};
     for(let i=0;i<110;i++){
       const sec=Math.round((Date.now()-t0)/1000);
       cap('Ligando o servidor no Kaggle… '+sec+'s'+(ks?' · Kaggle: '+(nome[ks]||ks):''));await sleep(4000);
       url=await gwFind();if(url&&await ping(url))return conectar(url);
+      if(!pushed&&sec>50){pushed=true;jlog('WARN','Sessão antiga sem aviso do endereço; reenviando o JJ…');
+        try{await pushKernel()}catch(e){throw new Error('Há uma sessão antiga do jj-server no Kaggle que não publicou o endereço. Pare-a em kaggle.com/code/'+S.kaggleUser.trim()+'/'+SLUG+' ou cole o Gateway do log dos Ajustes. ('+e.message+')')}}
       if(i%4===3){try{ks=(await kStatus()).split('.').pop()}catch(e){}
         if(sec>60&&(ks==='error'||ks==='complete'||ks.startsWith('cancel')))throw new Error('O kernel jj-server parou no Kaggle ('+ks+'). Abra kaggle.com/code/'+S.kaggleUser.trim()+'/'+SLUG+' e veja o log.')}}
     throw new Error('Tempo esgotado (7 min). Abra o kernel jj-server no Kaggle e veja o log.')

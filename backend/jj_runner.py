@@ -44,7 +44,7 @@ def publish(text):
         if rc == 0:
             return True
         time.sleep(3)
-    say("Aviso: nao consegui enviar Gateway.md:", out[:200])
+    say("[vault] envio do Gateway.md nao concluiu (so afeta a sincronizacao das notas).")
     return False
 
 
@@ -54,7 +54,7 @@ def ntfy(msg):
         urllib.request.urlopen(req, timeout=15)
         return True
     except Exception as e:
-        say("Aviso: ntfy falhou:", e)
+        say("[ntfy] indisponivel agora:", e)
         return False
 
 
@@ -141,15 +141,19 @@ def main():
 
     def pub_vault():
         ok = publish(f"# Gateway do JJ\n\nAtualizado: {time.strftime('%Y-%m-%d %H:%M')}\n\n{url}\n")
-        say("Gateway publicado no vault." if ok else "Gateway NAO publicado no vault (nao impede o app de conectar).")
+        say("[vault] Gateway.md publicado." if ok else "[vault] sync com o GitHub indisponivel; o app conecta normalmente pelo ntfy.")
         if not ok:
             diagnose()
     threading.Thread(target=pub_vault, daemon=True).start()
     # extras em segundo plano: busca na web, PDF, RAG. Sem fastembed o RAG usa TF-IDF
     threading.Thread(target=lambda: (pip(missing(LATER)), pip(missing({"fastembed": "fastembed"}))), daemon=True).start()
 
+    last = time.time()
     while server.poll() is None and tun.poll() is None:
         time.sleep(5)
+        if time.time() - last > 1800:  # reanuncia a cada 30 min (o ntfy guarda mensagens por ~12h)
+            ntfy(url)
+            last = time.time()
 
     say("[runner] encerrando...", "(servidor parou)" if server.poll() is not None else "(tunel caiu)")
     for p in (server, tun):
