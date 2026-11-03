@@ -48,7 +48,11 @@ class PhoneBridge(private val act: Activity) {
     }
 
     @JavascriptInterface fun openSettings(kind: String) {
-        act.runOnUiThread { try { act.startActivity(Phone.settingsIntent(act, kind)) } catch (e: Exception) {} }
+        act.runOnUiThread {
+            try { act.startActivity(Phone.settingsIntent(act, kind)) } catch (e: Exception) {
+                try { act.startActivity(Phone.settingsIntent(act, "app")) } catch (e2: Exception) {}  // aparelho sem essa tela (nao e Xiaomi)
+            }
+        }
     }
 
     @JavascriptInterface fun test(action: String, text: String): String =
@@ -59,6 +63,7 @@ class PhoneBridge(private val act: Activity) {
         val o = JSONObject()
         o.put("service", PhoneService.running)
         o.put("acc", JJAccessibility.inst != null)
+        o.put("acc_dead", AccGuard.enabledInSettings(act) && JJAccessibility.inst == null)
         o.put("notif", JJNotifListener.inst != null)
         o.put("overlay", Settings.canDrawOverlays(act))
         o.put("battery", pm.isIgnoringBatteryOptimizations(act.packageName))

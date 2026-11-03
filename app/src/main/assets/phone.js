@@ -35,7 +35,7 @@
 
   var btn = document.createElement('button'); btn.id = 'pbtn'; btn.textContent = '\uD83D\uDCF1'; btn.title = 'Controle do celular';
   var ov = document.createElement('div'); ov.id = 'pov';
-  ov.innerHTML = '<div id="pbox"><h3>CONTROLE DO CELULAR</h3><div id="prows"></div><div class="pr"><span>Testar agora<small>executa no aparelho</small></span><span><button data-t="status">Status</button> <button data-t="camera">Foto</button> <button data-t="read_screen">Ler tela</button></span></div><pre id="pout" style="white-space:pre-wrap;color:#9fffe0;font-size:1.8vh;max-height:18vh;overflow:auto"></pre><div style="text-align:right;margin-top:1vh"><button id="pclose">Fechar</button></div></div>';
+  ov.innerHTML = '<div id="pbox"><h3>CONTROLE DO CELULAR</h3><div id="prows"></div><div class="pr"><span>Testar agora<small>executa no aparelho</small></span><span><button data-t="status">Status</button> <button data-t="camera">Foto</button> <button data-t="read_screen">Ler tela</button></span></div><pre id="pout" style="white-space:pre-wrap;color:#9fffe0;font-size:1.8vh;max-height:18vh;overflow:auto"></pre><div style="text-align:right;margin-top:1vh"><button id="pclose">Fechar</button></div><small style="color:#6f97b0;font-size:1.7vh">Dica: nos recentes, segure o card do JJ e toque no cadeado. Nao deslize o JJ para fechar: o Android desliga a acessibilidade.</small></div>';
   document.body.appendChild(btn); document.body.appendChild(ov);
 
   var ROWS = [
@@ -44,14 +44,18 @@
     ['acc', 'Acessibilidade', 'Tocar, rolar, digitar, ler e capturar a tela', ['acc'], function () { P.openSettings('accessibility') }, 'Abrir'],
     ['notif', 'Acesso as notificacoes', 'Ler notificacoes do celular', ['notif'], function () { P.openSettings('notification') }, 'Abrir'],
     ['overlay', 'Sobrepor outros apps', 'Necessario para abrir apps com a tela em segundo plano', ['overlay'], function () { P.openSettings('overlay') }, 'Abrir'],
-    ['battery', 'Sem restricao de bateria', 'Evita que o Android pause o JJ', ['battery'], function () { P.openSettings('battery') }, 'Abrir']
+    ['battery', 'Sem restricao de bateria', 'Evita que o Android pause o JJ', ['battery'], function () { P.openSettings('battery') }, 'Abrir'],
+    ['xpower', 'Xiaomi: economia de bateria do JJ', 'Marque "Sem restricoes". Sem isso o HyperOS mata o JJ e desliga a acessibilidade', null, function () { P.openSettings('powerkeeper') }, 'Abrir'],
+    ['xauto', 'Xiaomi: autoinicio', 'Ative o JJ na lista de autoinicio', null, function () { P.openSettings('autostart') }, 'Abrir'],
+    ['xperm', 'Xiaomi: permissoes extras', 'Ligue "Exibir pop-ups em segundo plano" e "Tela de bloqueio"', null, function () { P.openSettings('xiaomi_perms') }, 'Abrir']
   ];
   function say(t) { document.getElementById('pout').textContent = t }
   function render() {
     var s; try { s = JSON.parse(P.status()) } catch (e) { return }
     var h = ROWS.map(function (r, i) {
-      var ok = r[3].every(function (k) { return s[k] });
-      return '<div class="pr"><span>' + r[1] + ' <b class="' + (ok ? 'ok' : 'no') + '">' + (ok ? 'ATIVO' : 'FALTA') + '</b><small>' + r[2] + '</small></span><button data-r="' + i + '">' + r[5] + '</button></div>';
+      var ok = r[3] ? r[3].every(function (k) { return s[k] }) : null;
+      var tag = ok === null ? '' : ' <b class="' + (ok ? 'ok' : 'no') + '">' + (ok ? 'ATIVO' : (r[0] === 'acc' && s.acc_dead ? 'PAROU - religue' : 'FALTA')) + '</b>';
+      return '<div class="pr"><span>' + r[1] + tag + '<small>' + r[2] + '</small></span><button data-r="' + i + '">' + r[5] + '</button></div>';
     }).join('');
     document.getElementById('prows').innerHTML = h;
   }

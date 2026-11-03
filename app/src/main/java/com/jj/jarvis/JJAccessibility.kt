@@ -56,6 +56,20 @@ class JJAccessibility : AccessibilityService() {
         return "app: ${root.packageName}\n$sb"
     }
 
+    /** Resumo curto do que esta na tela (app + primeiros textos). */
+    fun summary(): String {
+        val root = rootInActiveWindow ?: return "(tela indisponivel)"
+        val parts = ArrayList<String>()
+        fun walk(nd: AccessibilityNodeInfo?) {
+            if (nd == null || parts.size >= 14) return
+            val t = (nd.text ?: nd.contentDescription)?.toString()?.replace("\n", " ")?.trim()
+            if (!t.isNullOrEmpty() && t.length < 80) parts.add(t)
+            for (i in 0 until nd.childCount) walk(nd.getChild(i))
+        }
+        walk(root)
+        return (root.packageName?.toString() ?: "?") + ": " + parts.joinToString(" | ").take(500)
+    }
+
     fun gesture(p: Path, ms: Long): Boolean {
         val latch = CountDownLatch(1)
         var ok = false

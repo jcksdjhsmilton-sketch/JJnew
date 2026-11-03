@@ -180,6 +180,7 @@ class MainActivity : Activity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
+        Phone.jjFront = hasFocus
         if (hasFocus) hideBars()
     }
 

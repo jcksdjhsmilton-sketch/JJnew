@@ -46,6 +46,9 @@ class PhoneService : Service() {
             val t = Thread { loop() }
             t.isDaemon = true
             t.start()
+            val g = Thread { guardLoop() }
+            g.isDaemon = true
+            g.start()
         }
         return START_STICKY
     }
@@ -75,6 +78,14 @@ class PhoneService : Service() {
             .setOngoing(true)
             .addAction(Notification.Action.Builder(0, "Falar com o JJ", talk).build())
         return try { startForeground(1, b.build()); true } catch (e: Exception) { false }
+    }
+
+    /** A cada 20 s confere se a acessibilidade continua viva (ver AccGuard). */
+    private fun guardLoop() {
+        while (alive) {
+            try { AccGuard.check(applicationContext) } catch (e: Exception) {}
+            try { Thread.sleep(20000) } catch (e: InterruptedException) { break }
+        }
     }
 
     private fun http(method: String, url: String, tok: String, body: String?, readMs: Int): String {

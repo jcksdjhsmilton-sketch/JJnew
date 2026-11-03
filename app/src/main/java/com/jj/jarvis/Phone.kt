@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.app.SearchManager
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -13,8 +14,13 @@ import android.hardware.camera2.CameraManager
 import android.location.Location
 import android.location.LocationManager
 import android.media.AudioManager
+import android.media.MediaMetadata
+import android.media.session.MediaController
+import android.media.session.MediaSessionManager
+import android.media.session.PlaybackState
 import android.net.Uri
 import android.os.BatteryManager
+import android.os.Bundle
 import android.os.PowerManager
 import android.provider.AlarmClock
 import android.provider.ContactsContract
@@ -29,6 +35,9 @@ class Res(val ok: Boolean, val text: String, val image: String? = null)
 
 /** Executa os comandos que o servidor (IA) manda para o celular. */
 object Phone {
+    /** true enquanto a tela do JJ esta na frente (MainActivity.onWindowFocusChanged) */
+    @Volatile var jjFront = false
+
     private const val NO_ACC = "Acessibilidade desativada. Ative em: app JJ > icone do celular > Acessibilidade."
 
     fun has(c: Context, p: String) = c.checkSelfPermission(p) == PackageManager.PERMISSION_GRANTED
@@ -49,6 +58,12 @@ object Phone {
         "wifi" -> Intent(Settings.ACTION_WIFI_SETTINGS)
         "bluetooth" -> Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
         "display" -> Intent(Settings.ACTION_DISPLAY_SETTINGS)
+        "autostart" -> Intent().setComponent(ComponentName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity"))
+        "powerkeeper" -> Intent().setComponent(ComponentName("com.miui.powerkeeper", "com.miui.powerkeeper.ui.HiddenAppsConfigActivity"))
+            .putExtra("package_name", c.packageName).putExtra("package_label", "JJ")
+        "xiaomi_perms" -> Intent("miui.intent.action.APP_PERM_EDITOR")
+            .setComponent(ComponentName("com.miui.securitycenter", "com.miui.permcenter.permissions.PermissionsEditorActivity"))
+            .putExtra("extra_pkgname", c.packageName)
         else -> Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + c.packageName))
     }
 
@@ -58,8 +73,8 @@ object Phone {
         return try {
             when (action) {
                 "status" -> Res(true, status(c))
-                "open_app" -> openApp(c, text)
-                "open_url" -> openUrl(c, text)
+                "open_app" -> seen(c, openApp(c, text))
+                "open_url" -> seen(c, openUrl(c, text))
                 "play_music" -> playMusic(c, text, extra)
                 "media" -> media(c, text)
                 "volume" -> volume(c, text)
@@ -75,23 +90,23 @@ object Phone {
                     val x = a.optInt("x", 0)
                     val y = a.optInt("y", 0)
                     val ok = if (text.isNotEmpty()) acc.tapText(text) else acc.tapXY(x.toFloat(), y.toFloat())
-                    Res(ok, if (ok) "toquei" else "nao consegui tocar (use read_screen para ver os rotulos)")
+                    seen(c, Res(ok, if (ok) "toquei" else "nao consegui tocar (use read_screen para ver os rotulos)"))
                 }
                 "swipe" -> {
                     val acc = JJAccessibility.inst ?: return Res(false, NO_ACC)
                     val ok = acc.swipe(text)
-                    Res(ok, if (ok) "rolei $text" else "gesto falhou")
+                    seen(c, Res(ok, if (ok) "rolei $text" else "gesto falhou"))
                 }
                 "type" -> {
                     val acc = JJAccessibility.inst ?: return Res(false, NO_ACC)
                     val ok = acc.typeText(text)
                     if (ok && extra == "submit") acc.submit()
-                    Res(ok, if (ok) "digitei" else "nenhum campo de texto em foco")
+                    seen(c, Res(ok, if (ok) "digitei" else "nenhum campo de texto em foco"))
                 }
                 "key" -> {
                     val acc = JJAccessibility.inst ?: return Res(false, NO_ACC)
                     val ok = acc.globalKey(text)
-                    Res(ok, if (ok) "ok: $text" else "tecla nao suportada: $text")
+                    seen(c, Res(ok, if (ok) "ok: $text" else "tecla nao suportada: $text"))
                 }
                 "notifications" -> Res(true, (JJNotifListener.inst ?: return Res(false, "Acesso as notificacoes desativado. Ative no painel do JJ.")).dump())
                 "call" -> call(c, text)
@@ -127,7 +142,8 @@ object Phone {
         return "bateria $bat%${if (bm.isCharging) " (carregando)" else ""}; tela ${if (pm.isInteractive) "ligada" else "apagada"}; " +
             "app na frente: ${JJAccessibility.fg}; acessibilidade ${f(JJAccessibility.inst != null)}; " +
             "notificacoes ${f(JJNotifListener.inst != null)}; sobreposicao ${f(Settings.canDrawOverlays(c))}; " +
-            "camera ${f(has(c, Manifest.permission.CAMERA))}; contatos ${f(has(c, Manifest.permission.READ_CONTACTS))}"
+            "camera ${f(has(c, Manifest.permission.CAMERA))}; contatos ${f(has(c, Manifest.permission.READ_CONTACTS))}; " +
+            "tocando: ${nowPlaying(c)?.first ?: "nada"}"
     }
 
     private fun openApp(c: Context, name: String): Res {
@@ -161,7 +177,58 @@ object Phone {
         am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, code))
     }
 
+    /** Resumo curto da tela depois de uma acao: e o "olho" do JJ para saber se deu certo. */
+    private fun seen(c: Context, r: Res): Res {
+        if (!r.ok) return r
+        Thread.sleep(1200)
+        val acc = JJAccessibility.inst ?: return r
+        return Res(true, r.text + "\n[tela agora] " + acc.summary())
+    }
+
+    private fun returnToJJ(c: Context) {
+        try {
+            c.startActivity(Intent(c, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+        } catch (e: Exception) {}
+        Thread.sleep(900)
+        val acc = JJAccessibility.inst
+        if (acc != null && JJAccessibility.fg != c.packageName) acc.globalKey("back")  // plano B: volta pelo botao voltar
+    }
+
+    private fun controller(c: Context, pkg: String): MediaController? {
+        if (JJNotifListener.inst == null) return null
+        return try {
+            val msm = c.getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
+            msm.getActiveSessions(ComponentName(c, JJNotifListener::class.java)).firstOrNull { pkg.isEmpty() || it.packageName == pkg }
+        } catch (e: Exception) { null }
+    }
+
+    /** (titulo - artista, tocando?) da sessao de midia ativa; precisa do acesso as notificacoes. */
+    fun nowPlaying(c: Context): Pair<String, Boolean>? {
+        if (JJNotifListener.inst == null) return null
+        return try {
+            val msm = c.getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
+            val list = msm.getActiveSessions(ComponentName(c, JJNotifListener::class.java))
+            val s = list.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING } ?: list.firstOrNull() ?: return null
+            val md = s.metadata
+            val title = md?.getString(MediaMetadata.METADATA_KEY_TITLE) ?: ""
+            val artist = md?.getString(MediaMetadata.METADATA_KEY_ARTIST) ?: ""
+            val name = listOf(title, artist).filter { it.isNotEmpty() }.joinToString(" - ").ifEmpty { s.packageName }
+            Pair(name, s.playbackState?.state == PlaybackState.STATE_PLAYING)
+        } catch (e: Exception) { null }
+    }
+
     private fun playMusic(c: Context, q: String, pkg: String): Res {
+        val wasFront = jjFront || JJAccessibility.fg == c.packageName
+        // 1) ja existe um player com sessao ativa: manda tocar sem abrir nada (voce continua no JJ)
+        val ctl = controller(c, pkg)
+        if (ctl != null) {
+            try { ctl.transportControls.playFromSearch(q, Bundle()) } catch (e: Exception) {}
+            Thread.sleep(2500)
+            val np = nowPlaying(c)
+            if (np != null && np.second) return Res(true, "tocando em segundo plano: ${np.first}")
+        }
+        // 2) abre o app do player so o tempo de comecar a tocar e devolve voce ao JJ
         val i = Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH)
         i.putExtra(MediaStore.EXTRA_MEDIA_FOCUS, "vnd.android.cursor.item/*")
         i.putExtra(SearchManager.QUERY, q)
@@ -174,7 +241,12 @@ object Phone {
         if (r != "ok") return Res(false, r)
         Thread.sleep(3500)
         key(c, KeyEvent.KEYCODE_MEDIA_PLAY)
-        return Res(true, "tocando \"$q\"")
+        Thread.sleep(800)
+        if (wasFront) returnToJJ(c)
+        Thread.sleep(1000)
+        val np = nowPlaying(c)
+        val back = if (wasFront) " (voltei para o JJ)" else ""
+        return Res(true, if (np != null) "tocando${if (np.second) "" else " (parece pausado)"}: ${np.first}$back" else "pedi para tocar \"$q\"$back")
     }
 
     private fun media(c: Context, what: String): Res {
