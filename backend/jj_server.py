@@ -835,6 +835,13 @@ def brain_read(req: Request, path: str):
     return {"text": t_brain_read(path)}
 
 
+try:  # extensoes opcionais (MoE, CoT, auto-RAG, controle do celular); o servidor basico segue funcionando sem elas
+    import jj_ext
+    jj_ext.install(globals())
+except Exception as _e:
+    log("ERROR", f"jj_ext nao carregou: {_e}")
+
+
 if __name__ == "__main__":
     vault_init()
     if os.environ.get("JJ_SEED", "1") != "0":

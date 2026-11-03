@@ -45,6 +45,10 @@ class MainActivity : Activity() {
         s.mediaPlaybackRequiresUserGesture = false
         s.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         web.addJavascriptInterface(Bridge(), "JJ")
+        web.addJavascriptInterface(PhoneBridge(this), "JJP")
+        if (has(Manifest.permission.CAMERA) && has(Manifest.permission.RECORD_AUDIO) && PhoneService.prefs(this).getBoolean("auto", true)) {
+            PhoneService.start(this)
+        }
         web.webChromeClient = object : WebChromeClient() {
             override fun onGeolocationPermissionsShowPrompt(origin: String, cb: GeolocationPermissions.Callback) {
                 cb.invoke(origin, true, false)
@@ -191,6 +195,12 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         web.evaluateJavascript("jjBack()") { r -> if (r != "true") finish() }
+    }
+
+    // botao "Falar com o JJ" da notificacao do servico em segundo plano
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        if (intent?.getBooleanExtra("talk", false) == true) js("if(window.listen)listen()")
     }
 
     override fun onDestroy() {
