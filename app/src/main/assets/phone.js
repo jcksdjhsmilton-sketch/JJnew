@@ -39,6 +39,14 @@
   document.body.appendChild(btn); document.body.appendChild(ov);
 
   var ROWS = [
+    ['shz', 'Shizuku (recomendado: configura tudo sozinho)', 'Ligue o Shizuku (depuracao sem fio), toque em Pedir e aceite. Depois toque em Configurar tudo', ['shz_granted'], function () {
+      var r = P.shizukuRequest();
+      say(r === 'not_installed' ? 'Instale o Shizuku (abri a pagina de download).' : r === 'not_running' ? 'Abri o Shizuku: inicie o servico la e volte aqui.' : r === 'asked' ? 'Aceite o pedido do Shizuku na tela.' : 'Shizuku ja esta liberado.')
+    }, 'Pedir'],
+    ['shzsetup', 'Configurar tudo com Shizuku', 'Concede permissoes, acessibilidade, notificacoes e bateria de uma vez', null, function () {
+      P.shizukuSetup(); say('Configurando...');
+      var n = 0, t = setInterval(function () { var r = P.shizukuReport(); say(r); if ((r && r !== 'executando...') || ++n > 40) clearInterval(t) }, 1000)
+    }, 'Configurar'],
     ['perms', 'Permissoes (mic, camera, local, contatos, ligar, SMS)', 'Toque em Conceder e aceite todas', ['camera', 'mic', 'loc', 'contacts', 'call', 'sms'], function () { P.requestPerms() }, 'Conceder'],
     ['service', 'Servico em segundo plano', 'Mantem o JJ ouvindo comandos com a tela apagada', ['service'], function () { var s = JSON.parse(P.status()); if (s.service) P.stop(); else if (P.start() === 'perm') say('Conceda camera e microfone primeiro.') }, 'Ligar/Parar'],
     ['acc', 'Acessibilidade', 'Tocar, rolar, digitar, ler e capturar a tela', ['acc'], function () { P.openSettings('accessibility') }, 'Abrir'],
@@ -68,5 +76,12 @@
   setInterval(function () { if (ov.classList.contains('on')) render() }, 2500);
   document.addEventListener('visibilitychange', function () { if (!document.hidden && ov.classList.contains('on')) render() });
   // liga o servico sozinho se as permissoes ja foram dadas
-  setTimeout(function () { try { var s = JSON.parse(P.status()); if (P.auto() && !s.service && s.camera && s.mic) P.start() } catch (e) {} }, 2500);
+  setTimeout(function () {
+    try {
+      var s = JSON.parse(P.status());
+      if (s.shz_running && !s.shz_granted) P.shizukuRequest();                 // pede o Shizuku sozinho (uma vez)
+      else if (s.shz_granted && !P.shizukuSetupDone()) P.shizukuSetup();       // e configura todas as permissoes
+      if (P.auto() && !s.service && s.camera && s.mic) P.start();
+    } catch (e) {}
+  }, 2500);
 })();

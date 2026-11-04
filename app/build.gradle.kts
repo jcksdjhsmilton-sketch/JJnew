@@ -9,12 +9,17 @@ android {
         applicationId = "com.jj.jarvis"
         minSdk = 24
         targetSdk = 34
-        versionCode = 5
-        versionName = "3.1"
+        versionCode = 6
+        versionName = "3.2"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+}
+
+dependencies {
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
 }

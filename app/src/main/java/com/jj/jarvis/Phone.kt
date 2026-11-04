@@ -9,6 +9,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.BitmapFactory
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.location.Location
@@ -28,6 +29,7 @@ import android.provider.MediaStore
 import android.provider.Settings
 import android.telephony.SmsManager
 import android.view.KeyEvent
+import org.json.JSONArray
 import org.json.JSONObject
 import java.text.Normalizer
 
@@ -45,8 +47,28 @@ object Phone {
     private fun norm(s: String): String =
         Normalizer.normalize(s.lowercase(), Normalizer.Form.NFD).replace(Regex("\\p{Mn}+"), "")
 
+    private fun installed(c: Context, pkg: String): Boolean =
+        try { c.packageManager.getPackageInfo(pkg, 0); true } catch (e: Exception) { false }
+
+    /** Evita a telinha "Abrir com...": fixa o app que vai tratar o link/acao. */
+    private fun pinHandler(c: Context, i: Intent) {
+        val pm = c.packageManager
+        val d = i.dataString ?: ""
+        if ((d.contains("youtube.com") || d.contains("youtu.be")) && installed(c, "com.google.android.youtube")) {
+            i.setPackage("com.google.android.youtube")
+            return
+        }
+        val ri = pm.resolveActivity(i, PackageManager.MATCH_DEFAULT_ONLY)
+        if (ri == null || ri.activityInfo.name.contains("ResolverActivity")) {
+            val list = pm.queryIntentActivities(i, PackageManager.MATCH_DEFAULT_ONLY)
+            val pick = list.firstOrNull { it.activityInfo.packageName == "com.android.chrome" } ?: list.firstOrNull()
+            if (pick != null) i.setPackage(pick.activityInfo.packageName)
+        }
+    }
+
     private fun launch(c: Context, i: Intent): String {
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (i.action == Intent.ACTION_VIEW && i.getPackage() == null) pinHandler(c, i)
         return try { c.startActivity(i); "ok" } catch (e: Exception) { "erro ao abrir: ${e.message}" }
     }
 
@@ -67,47 +89,34 @@ object Phone {
         else -> Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + c.packageName))
     }
 
+    @Volatile private var fastMode = false
+    private val KEYEV = mapOf("back" to "KEYCODE_BACK", "home" to "KEYCODE_HOME", "recents" to "KEYCODE_APP_SWITCH",
+        "lock" to "KEYCODE_SLEEP", "screenshot" to "KEYCODE_SYSRQ")
+
     fun exec(c: Context, action: String, a: JSONObject): Res {
         val text = a.optString("text", "")
         val extra = a.optString("extra", "")
+        fastMode = a.optBoolean("fast", false)
         return try {
             when (action) {
                 "status" -> Res(true, status(c))
                 "open_app" -> seen(c, openApp(c, text))
                 "open_url" -> seen(c, openUrl(c, text))
                 "play_music" -> playMusic(c, text, extra)
+                "set_player" -> setPlayer(c, text)
+                "now_playing" -> {
+                    val np = nowPlaying(c)
+                    Res(true, if (np == null) "nada tocando (ou o acesso as notificacoes esta desligado)" else (if (np.second) "tocando: " else "pausado: ") + np.first)
+                }
                 "media" -> media(c, text)
                 "volume" -> volume(c, text)
-                "camera" -> Cam.shot(c, text.lowercase().startsWith("front") || text.lowercase().startsWith("fron"))
-                "screenshot" -> {
-                    val acc = JJAccessibility.inst ?: return Res(false, NO_ACC)
-                    val bm = acc.screenshot() ?: return Res(false, "captura de tela indisponivel (precisa Android 11+)")
-                    Res(true, "captura da tela", Img.fromBitmap(bm))
-                }
+                "camera" -> Cam.shot(c, text.lowercase().startsWith("fron"))
+                "screenshot" -> screenshot(c)
                 "read_screen" -> Res(true, (JJAccessibility.inst ?: return Res(false, NO_ACC)).readScreen())
-                "tap" -> {
-                    val acc = JJAccessibility.inst ?: return Res(false, NO_ACC)
-                    val x = a.optInt("x", 0)
-                    val y = a.optInt("y", 0)
-                    val ok = if (text.isNotEmpty()) acc.tapText(text) else acc.tapXY(x.toFloat(), y.toFloat())
-                    seen(c, Res(ok, if (ok) "toquei" else "nao consegui tocar (use read_screen para ver os rotulos)"))
-                }
-                "swipe" -> {
-                    val acc = JJAccessibility.inst ?: return Res(false, NO_ACC)
-                    val ok = acc.swipe(text)
-                    seen(c, Res(ok, if (ok) "rolei $text" else "gesto falhou"))
-                }
-                "type" -> {
-                    val acc = JJAccessibility.inst ?: return Res(false, NO_ACC)
-                    val ok = acc.typeText(text)
-                    if (ok && extra == "submit") acc.submit()
-                    seen(c, Res(ok, if (ok) "digitei" else "nenhum campo de texto em foco"))
-                }
-                "key" -> {
-                    val acc = JJAccessibility.inst ?: return Res(false, NO_ACC)
-                    val ok = acc.globalKey(text)
-                    seen(c, Res(ok, if (ok) "ok: $text" else "tecla nao suportada: $text"))
-                }
+                "tap" -> tap(c, text, a.optInt("x", 0), a.optInt("y", 0))
+                "swipe" -> swipe(c, text)
+                "type" -> typeText(c, text, extra)
+                "key" -> keyAction(c, text)
                 "notifications" -> Res(true, (JJNotifListener.inst ?: return Res(false, "Acesso as notificacoes desativado. Ative no painel do JJ.")).dump())
                 "call" -> call(c, text)
                 "sms" -> sms(c, text, extra)
@@ -127,11 +136,160 @@ object Phone {
                     val r = launch(c, settingsIntent(c, text))
                     Res(r == "ok", if (r == "ok") "abri configuracoes: $text" else r)
                 }
+                "batch" -> batch(c, text)
+                "shell" -> shell(text)
+                "system" -> system(text)
+                "wake" -> wake(c)
+                "apps" -> apps(c)
                 else -> Res(false, "acao desconhecida: $action")
             }
         } catch (e: Exception) {
             Res(false, "erro ${e.javaClass.simpleName}: ${e.message}")
         }
+    }
+
+    /** Varias acoes numa ida so (menos viagens ate a IA = mais rapido). text = JSON: [{"action":"tap","text":"OK","wait":300}, ...] */
+    private fun batch(c: Context, json: String): Res {
+        val arr = JSONArray(json)
+        val prev = fastMode
+        val sb = StringBuilder()
+        var ok = true
+        for (i in 0 until arr.length()) {
+            val o = arr.getJSONObject(i)
+            val a2 = JSONObject().put("text", o.optString("text", "")).put("extra", o.optString("extra", ""))
+                .put("x", o.optInt("x", 0)).put("y", o.optInt("y", 0)).put("fast", true)
+            val r = exec(c, o.optString("action"), a2)
+            sb.append(i + 1).append(". ").append(o.optString("action")).append(": ").append(if (r.ok) "" else "FALHOU ").append(r.text.lines().first()).append('\n')
+            if (!r.ok) { ok = false; break }
+            Thread.sleep(o.optLong("wait", 250))
+        }
+        fastMode = prev
+        return seen(c, Res(ok, sb.toString().trim()))
+    }
+
+    private fun screenshot(c: Context): Res {
+        if (Shizu.ready()) {
+            val b = Shizu.bytes("screencap -p")
+            if (b != null && b.size > 1000) {
+                val bm = BitmapFactory.decodeByteArray(b, 0, b.size)
+                if (bm != null) return Res(true, "captura da tela", Img.fromBitmap(bm))
+            }
+        }
+        val acc = JJAccessibility.inst ?: return Res(false, NO_ACC)
+        val bm = acc.screenshot() ?: return Res(false, "captura de tela indisponivel (precisa Android 11+ ou Shizuku)")
+        return Res(true, "captura da tela", Img.fromBitmap(bm))
+    }
+
+    private fun tap(c: Context, text: String, x: Int, y: Int): Res {
+        val acc = JJAccessibility.inst
+        val ok = when {
+            text.isNotEmpty() -> (acc ?: return Res(false, NO_ACC)).tapText(text)
+            Shizu.ready() -> Shizu.run("input tap $x $y").first == 0
+            acc != null -> acc.tapXY(x.toFloat(), y.toFloat())
+            else -> return Res(false, NO_ACC)
+        }
+        return seen(c, Res(ok, if (ok) "toquei" else "nao consegui tocar (confira o [tela agora] ou use read_screen)"))
+    }
+
+    private fun swipe(c: Context, dir: String): Res {
+        if (Shizu.ready()) {
+            val dm = c.resources.displayMetrics
+            val w = dm.widthPixels
+            val h = dm.heightPixels
+            val (x1, y1, x2, y2) = when (dir.lowercase()) {
+                "up" -> listOf(w / 2, h * 3 / 4, w / 2, h / 4)
+                "down" -> listOf(w / 2, h / 4, w / 2, h * 3 / 4)
+                "left" -> listOf(w * 4 / 5, h / 2, w / 5, h / 2)
+                "right" -> listOf(w / 5, h / 2, w * 4 / 5, h / 2)
+                else -> return Res(false, "use up, down, left ou right")
+            }
+            val ok = Shizu.run("input swipe $x1 $y1 $x2 $y2 300").first == 0
+            return seen(c, Res(ok, if (ok) "rolei $dir" else "gesto falhou"))
+        }
+        val acc = JJAccessibility.inst ?: return Res(false, NO_ACC)
+        val ok = acc.swipe(dir)
+        return seen(c, Res(ok, if (ok) "rolei $dir" else "gesto falhou"))
+    }
+
+    private fun typeText(c: Context, text: String, extra: String): Res {
+        val acc = JJAccessibility.inst
+        var ok = acc?.typeText(text) ?: false
+        if (!ok && Shizu.ready() && text.all { it.code in 32..126 }) {
+            ok = Shizu.run("input text " + Shizu.q(text.replace(" ", "%s"))).first == 0
+        }
+        if (ok && extra == "submit") {
+            if (Shizu.ready()) Shizu.run("input keyevent KEYCODE_ENTER") else acc?.submit()
+        }
+        return seen(c, Res(ok, if (ok) "digitei" else "nenhum campo de texto em foco"))
+    }
+
+    private fun keyAction(c: Context, name: String): Res {
+        val n = name.lowercase()
+        if (Shizu.ready()) {
+            val cmd = when (n) {
+                "notifications" -> "cmd statusbar expand-notifications"
+                "quick_settings" -> "cmd statusbar expand-settings"
+                else -> KEYEV[n]?.let { "input keyevent $it" }
+            }
+            if (cmd != null) {
+                val ok = Shizu.run(cmd).first == 0
+                return seen(c, Res(ok, if (ok) "ok: $name" else "falhou: $name"))
+            }
+        }
+        val acc = JJAccessibility.inst ?: return Res(false, NO_ACC)
+        val ok = acc.globalKey(n)
+        return seen(c, Res(ok, if (ok) "ok: $name" else "tecla nao suportada: $name"))
+    }
+
+    private fun shell(cmd: String): Res {
+        if (!Shizu.ready()) return Res(false, "Shizuku nao esta ativo: ligue o Shizuku e conceda ao JJ (painel do celular)")
+        val (code, out) = Shizu.run(cmd, 25)
+        return Res(code == 0, "[exit $code] " + out.take(3000))
+    }
+
+    private fun system(what: String): Res {
+        if (!Shizu.ready()) return Res(false, "precisa do Shizuku ativo")
+        val w = what.lowercase().trim()
+        val cmd = when {
+            w == "wifi_on" -> "svc wifi enable"
+            w == "wifi_off" -> "svc wifi disable"
+            w == "data_on" -> "svc data enable"
+            w == "data_off" -> "svc data disable"
+            w == "bt_on" -> "svc bluetooth enable"
+            w == "bt_off" -> "svc bluetooth disable"
+            w == "dnd_on" -> "settings put global zen_mode 1"
+            w == "dnd_off" -> "settings put global zen_mode 0"
+            w == "airplane_on" -> "cmd connectivity airplane-mode enable"
+            w == "airplane_off" -> "cmd connectivity airplane-mode disable"
+            w == "rotate_on" -> "settings put system accelerometer_rotation 1"
+            w == "rotate_off" -> "settings put system accelerometer_rotation 0"
+            w.startsWith("brightness:") -> {
+                val n = w.substringAfter(':').trim().toIntOrNull() ?: return Res(false, "use brightness:0-255")
+                "settings put system screen_brightness_mode 0; settings put system screen_brightness ${n.coerceIn(1, 255)}"
+            }
+            else -> return Res(false, "opcoes: wifi_on/off, data_on/off, bt_on/off, dnd_on/off, airplane_on/off, rotate_on/off, brightness:0-255")
+        }
+        val (code, out) = Shizu.run(cmd)
+        return Res(code == 0, if (code == 0) "ok: $what" else "falhou: ${out.take(120)}")
+    }
+
+    @Suppress("DEPRECATION")
+    private fun wake(c: Context): Res {
+        if (Shizu.ready()) {
+            Shizu.run("input keyevent KEYCODE_WAKEUP")
+            return Res(true, "tela acesa")
+        }
+        val pm = c.getSystemService(Context.POWER_SERVICE) as PowerManager
+        val wl = pm.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP, "jj:wake")
+        wl.acquire(4000)
+        return Res(true, "tela acesa")
+    }
+
+    private fun apps(c: Context): Res {
+        val pm = c.packageManager
+        val names = pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
+            .map { it.loadLabel(pm).toString() }.distinct().sorted()
+        return Res(true, names.take(150).joinToString(", "))
     }
 
     fun status(c: Context): String {
@@ -143,7 +301,7 @@ object Phone {
             "app na frente: ${JJAccessibility.fg}; acessibilidade ${f(JJAccessibility.inst != null)}; " +
             "notificacoes ${f(JJNotifListener.inst != null)}; sobreposicao ${f(Settings.canDrawOverlays(c))}; " +
             "camera ${f(has(c, Manifest.permission.CAMERA))}; contatos ${f(has(c, Manifest.permission.READ_CONTACTS))}; " +
-            "tocando: ${nowPlaying(c)?.first ?: "nada"}"
+            "shizuku ${if (Shizu.ready()) "ok" else "nao"}; tocando: ${nowPlaying(c)?.first ?: "nada"}"
     }
 
     private fun openApp(c: Context, name: String): Res {
@@ -160,6 +318,9 @@ object Phone {
             if (best == null && n.isNotEmpty() && (n.contains(q) || q.contains(n))) { best = r.activityInfo.packageName; bestLabel = label }
         }
         val pkg = best ?: return Res(false, "app nao encontrado: $name")
+        if (Shizu.ready() && Shizu.run("monkey -p $pkg -c android.intent.category.LAUNCHER 1", 10).first == 0) {
+            return Res(true, "abri $bestLabel")
+        }
         val li = pm.getLaunchIntentForPackage(pkg) ?: return Res(false, "sem tela de abertura: $bestLabel")
         val r = launch(c, li)
         return Res(r == "ok", if (r == "ok") "abri $bestLabel" else r)
@@ -179,20 +340,47 @@ object Phone {
 
     /** Resumo curto da tela depois de uma acao: e o "olho" do JJ para saber se deu certo. */
     private fun seen(c: Context, r: Res): Res {
-        if (!r.ok) return r
-        Thread.sleep(1200)
+        if (!r.ok || fastMode) return r
+        Thread.sleep(700)
         val acc = JJAccessibility.inst ?: return r
         return Res(true, r.text + "\n[tela agora] " + acc.summary())
     }
 
     private fun returnToJJ(c: Context) {
+        if (Shizu.ready()) {
+            Shizu.run("am start -n ${c.packageName}/.MainActivity")
+            return
+        }
         try {
             c.startActivity(Intent(c, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP))
         } catch (e: Exception) {}
-        Thread.sleep(900)
+        Thread.sleep(700)
         val acc = JJAccessibility.inst
-        if (acc != null && JJAccessibility.fg != c.packageName) acc.globalKey("back")  // plano B: volta pelo botao voltar
+        if (acc != null && JJAccessibility.fg != c.packageName) acc.globalKey("back")  // plano B
+    }
+
+    private val PLAYERS = listOf("com.spotify.music", "com.google.android.apps.youtube.music", "deezer.android.app",
+        "com.amazon.mp3", "com.miui.player", "com.google.android.music")
+
+    /** Escolhe o player sozinho (sem a telinha "Abrir com"): o salvo, senao o primeiro conhecido instalado. */
+    private fun pickPlayer(c: Context): String {
+        val found = c.packageManager.queryIntentActivities(Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH), 0)
+            .map { it.activityInfo.packageName }.filter { it != c.packageName }
+        if (found.isEmpty()) return ""
+        val saved = PhoneService.prefs(c).getString("music_pkg", "") ?: ""
+        if (saved.isNotEmpty() && found.contains(saved)) return saved
+        return PLAYERS.firstOrNull { found.contains(it) } ?: found.first()
+    }
+
+    private fun setPlayer(c: Context, t: String): Res {
+        val pm = c.packageManager
+        val q = norm(t)
+        val found = pm.queryIntentActivities(Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH), 0)
+        val m = found.firstOrNull { it.activityInfo.packageName == t || norm(it.loadLabel(pm).toString()).contains(q) }
+            ?: return Res(false, "player nao encontrado: $t")
+        PhoneService.prefs(c).edit().putString("music_pkg", m.activityInfo.packageName).apply()
+        return Res(true, "player padrao: ${m.loadLabel(pm)}")
     }
 
     private fun controller(c: Context, pkg: String): MediaController? {
@@ -218,33 +406,56 @@ object Phone {
         } catch (e: Exception) { null }
     }
 
-    private fun playMusic(c: Context, q: String, pkg: String): Res {
+    /** Espera comecar a tocar (devolve assim que comeca, sem tempo fixo). */
+    private fun waitPlaying(c: Context, ms: Long): Pair<String, Boolean>? {
+        if (JJNotifListener.inst == null) {
+            Thread.sleep(minOf(ms, 3500L))
+            return null
+        }
+        val end = System.currentTimeMillis() + ms
+        while (System.currentTimeMillis() < end) {
+            val np = nowPlaying(c)
+            if (np != null && np.second) return np
+            Thread.sleep(250)
+        }
+        return nowPlaying(c)
+    }
+
+    private fun playMusic(c: Context, q: String, pkgIn: String): Res {
         val wasFront = jjFront || JJAccessibility.fg == c.packageName
-        // 1) ja existe um player com sessao ativa: manda tocar sem abrir nada (voce continua no JJ)
-        val ctl = controller(c, pkg)
+        val player = if (pkgIn.isNotEmpty()) pkgIn else pickPlayer(c)
+        // 1) o player ja tem sessao ativa: manda tocar sem abrir nada (voce continua no JJ)
+        val ctl = controller(c, player)
         if (ctl != null) {
             try { ctl.transportControls.playFromSearch(q, Bundle()) } catch (e: Exception) {}
-            Thread.sleep(2500)
-            val np = nowPlaying(c)
-            if (np != null && np.second) return Res(true, "tocando em segundo plano: ${np.first}")
+            val np0 = waitPlaying(c, 3000)
+            if (np0 != null && np0.second) return Res(true, "tocando em segundo plano: ${np0.first}")
         }
-        // 2) abre o app do player so o tempo de comecar a tocar e devolve voce ao JJ
-        val i = Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH)
-        i.putExtra(MediaStore.EXTRA_MEDIA_FOCUS, "vnd.android.cursor.item/*")
-        i.putExtra(SearchManager.QUERY, q)
-        if (pkg.isNotEmpty()) i.setPackage(pkg)
-        if (i.resolveActivity(c.packageManager) == null) {
-            val r = launch(c, Intent(Intent.ACTION_VIEW, Uri.parse("https://open.spotify.com/search/" + Uri.encode(q))))
-            return Res(r == "ok", "nenhum app de musica aceitou a busca; abri a busca web de \"$q\"")
+        // 2) abre o player so ate comecar a tocar e devolve voce ao JJ
+        var started = false
+        if (Shizu.ready()) {
+            val pk = if (player.isNotEmpty()) "-p $player " else ""
+            started = Shizu.run("am start -a android.media.action.MEDIA_PLAY_FROM_SEARCH ${pk}--es query ${Shizu.q(q)} --es android.intent.extra.focus 'vnd.android.cursor.item/*'", 10).first == 0
         }
-        val r = launch(c, i)
-        if (r != "ok") return Res(false, r)
-        Thread.sleep(3500)
-        key(c, KeyEvent.KEYCODE_MEDIA_PLAY)
-        Thread.sleep(800)
+        if (!started) {
+            val i = Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH)
+            i.putExtra(MediaStore.EXTRA_MEDIA_FOCUS, "vnd.android.cursor.item/*")
+            i.putExtra(SearchManager.QUERY, q)
+            if (player.isNotEmpty()) i.setPackage(player)
+            if (i.resolveActivity(c.packageManager) == null) {
+                val r = launch(c, Intent(Intent.ACTION_VIEW, Uri.parse("https://open.spotify.com/search/" + Uri.encode(q))))
+                return Res(r == "ok", "nenhum app de musica aceitou a busca; abri a busca web de \"$q\"")
+            }
+            val r = launch(c, i)
+            if (r != "ok") return Res(false, r)
+        }
+        var np = waitPlaying(c, 7000)
+        if (np == null || !np.second) {
+            key(c, KeyEvent.KEYCODE_MEDIA_PLAY)
+            np = waitPlaying(c, 2500)
+        }
         if (wasFront) returnToJJ(c)
-        Thread.sleep(1000)
-        val np = nowPlaying(c)
+        if (player.isNotEmpty()) PhoneService.prefs(c).edit().putString("music_pkg", player).apply()
         val back = if (wasFront) " (voltei para o JJ)" else ""
         return Res(true, if (np != null) "tocando${if (np.second) "" else " (parece pausado)"}: ${np.first}$back" else "pedi para tocar \"$q\"$back")
     }

@@ -40,6 +40,43 @@ class PhoneBridge(private val act: Activity) {
         return "ok"
     }
 
+    /** Pede permissao ao Shizuku (ou abre o Shizuku / a pagina de instalacao). Devolve: ok | not_installed | not_running | asked */
+    @JavascriptInterface fun shizukuRequest(): String {
+        if (!Shizu.installed(act)) {
+            act.runOnUiThread {
+                try { act.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://github.com/RikkaApps/Shizuku/releases/latest")).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (e: Exception) {}
+            }
+            return "not_installed"
+        }
+        if (!Shizu.running()) {
+            act.runOnUiThread {
+                try {
+                    val li = act.packageManager.getLaunchIntentForPackage(Shizu.PKG)
+                    if (li != null) act.startActivity(li)
+                } catch (e: Exception) {}
+            }
+            return "not_running"
+        }
+        if (Shizu.granted()) return "ok"
+        Shizu.request()
+        return "asked"
+    }
+
+    /** Configura TODAS as permissoes via Shizuku em segundo plano; o relatorio fica em shizukuReport(). */
+    @JavascriptInterface fun shizukuSetup() {
+        if (Shizu.lastReport == "executando...") return
+        Shizu.lastReport = "executando..."
+        val t = Thread {
+            Shizu.lastReport = try { Shizu.setupAll(act) } catch (e: Throwable) { "erro: ${e.message}" }
+            act.runOnUiThread { if (Phone.has(act, Manifest.permission.CAMERA) && Phone.has(act, Manifest.permission.RECORD_AUDIO)) PhoneService.start(act) }
+        }
+        t.isDaemon = true
+        t.start()
+    }
+
+    @JavascriptInterface fun shizukuReport(): String = Shizu.lastReport
+    @JavascriptInterface fun shizukuSetupDone(): Boolean = PhoneService.prefs(act).getBoolean("shz_setup", false)
+
     @JavascriptInterface fun auto(): Boolean = PhoneService.prefs(act).getBoolean("auto", true)
 
     @JavascriptInterface fun stop() {
@@ -67,6 +104,9 @@ class PhoneBridge(private val act: Activity) {
         o.put("notif", JJNotifListener.inst != null)
         o.put("overlay", Settings.canDrawOverlays(act))
         o.put("battery", pm.isIgnoringBatteryOptimizations(act.packageName))
+        o.put("shz_installed", Shizu.installed(act))
+        o.put("shz_running", Shizu.running())
+        o.put("shz_granted", Shizu.granted())
         o.put("camera", Phone.has(act, Manifest.permission.CAMERA))
         o.put("mic", Phone.has(act, Manifest.permission.RECORD_AUDIO))
         o.put("loc", Phone.has(act, Manifest.permission.ACCESS_FINE_LOCATION))
