@@ -11,16 +11,27 @@
   setInterval(sync, 4000); sync();
   // garante a captura mesmo que o app guarde a URL/token em outro campo: observa as chamadas ao servidor
   var of = window.fetch;
+  window.__jjcfg = window.__jjcfg || {};
   window.fetch = function (u, o) {
     try {
-      var m = String(u).match(/^(https?:\/\/[^\/]+)\/(health|chat|brain|logs|phone)/);
+      var m = String(u).match(/^(https?:\/\/[^\/]+)\/(health|chat|brain|logs|phone|mcp)/);
       if (m) {
         var h = o && o.headers, t = '';
         if (h) t = (typeof h.get === 'function') ? (h.get('X-JJ-Token') || '') : (h['X-JJ-Token'] || h['x-jj-token'] || '');
-        P.setConfig(m[1], t);
+        P.setConfig(m[1], t); window.__jjcfg = { gw: m[1], tok: t };
+        if (m[2] === 'chat' && o && typeof o.body === 'string') {      // anexa os conectores MCP a cada conversa
+          var raw = localStorage.getItem('jj_mcp');
+          if (raw) {
+            var arr = JSON.parse(raw);
+            if (Array.isArray(arr) && arr.length) {
+              var b = JSON.parse(o.body); b.mcp_servers = arr;
+              o = Object.assign({}, o, { body: JSON.stringify(b) });
+            }
+          }
+        }
       }
     } catch (e) {}
-    return of.apply(this, arguments);
+    return of.call(this, u, o);
   };
 
   var css = document.createElement('style');
@@ -29,6 +40,7 @@
     '#pov{position:fixed;inset:0;z-index:10;background:rgba(2,9,18,.92);display:none;align-items:center;justify-content:center}' +
     '#pov.on{display:flex}#pbox{width:min(720px,94vw);max-height:90vh;overflow:auto;border:1px solid var(--c,#00e5ff);background:rgba(4,18,34,.98);padding:2vh 2vw}' +
     '#pbox h3{color:var(--c,#00e5ff);font:700 2.2vh Orbitron,sans-serif;margin-bottom:1.2vh}' +
+    '#mov{position:fixed;inset:0;z-index:11;background:rgba(2,9,18,.94);display:none;align-items:center;justify-content:center}#mov.on{display:flex}#mbox{width:min(760px,94vw);max-height:92vh;overflow:auto;border:1px solid var(--c,#00e5ff);background:rgba(4,18,34,.98);padding:2vh 2vw}#mtxt{width:100%;height:34vh;background:#010a14;color:#d4f1ff;border:1px solid rgba(0,229,255,.3);font:1.8vh/1.4 ui-monospace,Consolas,monospace;padding:1vh;resize:none}' +
     '.pr{display:flex;justify-content:space-between;align-items:center;gap:1vw;padding:1vh 0;border-bottom:1px solid rgba(0,229,255,.18);font-size:2.1vh}' +
     '.pr small{display:block;color:#6f97b0;font-size:1.7vh}.pr button{white-space:nowrap}.ok{color:#3dffb0}.no{color:#ff4d6d}';
   document.head.appendChild(css);
@@ -53,6 +65,7 @@
     ['notif', 'Acesso as notificacoes', 'Ler notificacoes do celular', ['notif'], function () { P.openSettings('notification') }, 'Abrir'],
     ['overlay', 'Sobrepor outros apps', 'Necessario para abrir apps com a tela em segundo plano', ['overlay'], function () { P.openSettings('overlay') }, 'Abrir'],
     ['battery', 'Sem restricao de bateria', 'Evita que o Android pause o JJ', ['battery'], function () { P.openSettings('battery') }, 'Abrir'],
+    ['mcp', 'Conectores MCP', 'Notion, GitHub, e-mail, agenda... (cole a lista em JSON)', null, function () { openMcp() }, 'Editar'],
     ['xpower', 'Xiaomi: economia de bateria do JJ', 'Marque "Sem restricoes". Sem isso o HyperOS mata o JJ e desliga a acessibilidade', null, function () { P.openSettings('powerkeeper') }, 'Abrir'],
     ['xauto', 'Xiaomi: autoinicio', 'Ative o JJ na lista de autoinicio', null, function () { P.openSettings('autostart') }, 'Abrir'],
     ['xperm', 'Xiaomi: permissoes extras', 'Ligue "Exibir pop-ups em segundo plano" e "Tela de bloqueio"', null, function () { P.openSettings('xiaomi_perms') }, 'Abrir']
@@ -72,6 +85,36 @@
     if (t.dataset && t.dataset.r) { ROWS[+t.dataset.r][4](); setTimeout(render, 600) }
     if (t.dataset && t.dataset.t) { say('Executando...'); setTimeout(function () { say(P.test(t.dataset.t, '')) }, 50) }
   });
+  var mov = document.createElement('div'); mov.id = 'mov';
+  mov.innerHTML = '<div id="mbox"><h3 style="color:var(--c,#00e5ff);font:700 2.2vh Orbitron,sans-serif;margin-bottom:1vh">CONECTORES MCP</h3>' +
+    '<textarea id="mtxt" spellcheck="false" placeholder=\'[{"name":"github","url":"https://api.githubcopilot.com/mcp/","headers":{"Authorization":"Bearer SEU_TOKEN"}}]\'></textarea>' +
+    '<pre id="mout" style="white-space:pre-wrap;color:#9fffe0;font-size:1.8vh;max-height:16vh;overflow:auto;margin:1vh 0"></pre>' +
+    '<div style="display:flex;gap:1vw;flex-wrap:wrap"><button id="msave">Salvar e testar</button><button id="mex">Exemplo</button><button id="mclose">Fechar</button></div>' +
+    '<small style="color:#6f97b0;font-size:1.7vh">Servidores com URL (HTTP) usam "url" e "headers" (token). Servidores locais usam "command", "args" e "env". A lista fica so neste celular.</small></div>';
+  document.body.appendChild(mov);
+  function openMcp() { document.getElementById('mtxt').value = localStorage.getItem('jj_mcp') || ''; document.getElementById('mout').textContent = ''; mov.classList.add('on') }
+  function mout(t) { document.getElementById('mout').textContent = t }
+  function mcpTest(arr) {
+    var c = window.__jjcfg || {}, st = cfgOf(), gw = c.gw || (st && st.gateway) || '', tok = c.tok || (st && st.token) || '';
+    if (!gw) { mout('Salvo. Sem gateway ainda: abra os ajustes do JJ e configure o servidor.'); return }
+    mout('Salvo. Conectando...');
+    of.call(window, gw.replace(/\/+$/, '') + '/mcp/reload', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-JJ-Token': tok, 'ngrok-skip-browser-warning': '1' }, body: JSON.stringify({ servers: arr }) })
+      .then(function (r) { return r.json() })
+      .then(function (j) { mout((j.servers || []).map(function (x) { return (x.connected ? 'OK ' : 'ERRO ') + x.name + ': ' + (x.connected ? x.tools + ' ferramentas' : x.error) }).join('\n') || 'Nenhum servidor na lista.') })
+      .catch(function (e) { mout('Salvo, mas o servidor nao respondeu: ' + e.message) });
+  }
+  document.getElementById('msave').onclick = function () {
+    var v = document.getElementById('mtxt').value.trim();
+    if (!v) { localStorage.removeItem('jj_mcp'); mout('Conectores removidos.'); return }
+    try { var arr = JSON.parse(v); if (!Array.isArray(arr)) throw new Error('precisa ser uma lista [ ... ]'); localStorage.setItem('jj_mcp', JSON.stringify(arr)); mcpTest(arr) }
+    catch (e) { mout('JSON invalido: ' + e.message) }
+  };
+  document.getElementById('mex').onclick = function () {
+    document.getElementById('mtxt').value = JSON.stringify([
+      { name: 'github', url: 'https://api.githubcopilot.com/mcp/', headers: { Authorization: 'Bearer SEU_TOKEN' } },
+      { name: 'arquivos', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '/kaggle/working'] }], null, 2)
+  };
+  document.getElementById('mclose').onclick = function () { mov.classList.remove('on') };
   btn.onclick = function () { render(); ov.classList.add('on') };
   setInterval(function () { if (ov.classList.contains('on')) render() }, 2500);
   document.addEventListener('visibilitychange', function () { if (!document.hidden && ov.classList.contains('on')) render() });

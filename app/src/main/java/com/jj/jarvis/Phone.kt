@@ -117,7 +117,7 @@ object Phone {
                 "swipe" -> swipe(c, text)
                 "type" -> typeText(c, text, extra)
                 "key" -> keyAction(c, text)
-                "notifications" -> Res(true, (JJNotifListener.inst ?: return Res(false, "Acesso as notificacoes desativado. Ative no painel do JJ.")).dump())
+                "notifications" -> Res(true, (JJNotifListener.inst ?: return Res(false, "Acesso as notificacoes desativado. Ative no painel do JJ.")).dump(text, extra.toIntOrNull() ?: 12))
                 "call" -> call(c, text)
                 "sms" -> sms(c, text, extra)
                 "flashlight" -> torch(c, text.lowercase() != "off")

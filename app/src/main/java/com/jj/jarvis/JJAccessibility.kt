@@ -34,26 +34,33 @@ class JJAccessibility : AccessibilityService() {
         }
     }
 
+    /**
+     * Lista o que esta na tela. Se for longa, ELIMINA O INICIO e mantem o FIM: numa conversa a mensagem mais recente
+     * fica embaixo, e antes ela era cortada (o JJ lia mensagens antigas).
+     */
     fun readScreen(): String {
         val root = rootInActiveWindow ?: return "(tela indisponivel agora)"
-        val sb = StringBuilder()
-        var n = 0
+        val lines = ArrayList<String>()
         fun walk(nd: AccessibilityNodeInfo?) {
-            if (nd == null || n > 150 || sb.length > 6000) return
+            if (nd == null || lines.size > 700) return
             val t = (nd.text ?: nd.contentDescription)?.toString()?.replace("\n", " ")
             if (!t.isNullOrBlank() || nd.isClickable) {
                 val r = Rect()
                 nd.getBoundsInScreen(r)
-                sb.append("- ").append(t ?: "")
+                val sb = StringBuilder("- ").append((t ?: "").take(400))
                 if (nd.isClickable) sb.append(" [clicavel]")
                 if (nd.isEditable) sb.append(" [campo]")
-                sb.append(" @").append(r.centerX()).append(',').append(r.centerY()).append('\n')
-                n++
+                sb.append(" @").append(r.centerX()).append(',').append(r.centerY())
+                lines.add(sb.toString())
             }
             for (i in 0 until nd.childCount) walk(nd.getChild(i))
         }
         walk(root)
-        return "app: ${root.packageName}\n$sb"
+        var start = 0
+        var total = lines.sumOf { it.length + 1 }
+        while (total > 7000 && start < lines.size - 1) { total -= lines[start].length + 1; start++ }
+        val head = "app: ${root.packageName}" + if (start > 0) "\n[$start itens do INICIO omitidos; a lista termina no FIM da tela, onde ficam as mensagens mais recentes]" else ""
+        return head + "\n" + lines.subList(start, lines.size).joinToString("\n")
     }
 
     /** Resumo curto do que esta na tela (app + primeiros textos). */
@@ -61,13 +68,14 @@ class JJAccessibility : AccessibilityService() {
         val root = rootInActiveWindow ?: return "(tela indisponivel)"
         val parts = ArrayList<String>()
         fun walk(nd: AccessibilityNodeInfo?) {
-            if (nd == null || parts.size >= 14) return
+            if (nd == null || parts.size > 400) return
             val t = (nd.text ?: nd.contentDescription)?.toString()?.replace("\n", " ")?.trim()
-            if (!t.isNullOrEmpty() && t.length < 80) parts.add(t)
+            if (!t.isNullOrEmpty() && t.length < 120) parts.add(t)
             for (i in 0 until nd.childCount) walk(nd.getChild(i))
         }
         walk(root)
-        return (root.packageName?.toString() ?: "?") + ": " + parts.joinToString(" | ").take(500)
+        val pick = if (parts.size <= 14) parts else parts.take(4) + "..." + parts.takeLast(10)  // comeco (titulo) + FIM (o mais recente)
+        return (root.packageName?.toString() ?: "?") + ": " + pick.joinToString(" | ").take(600)
     }
 
     fun gesture(p: Path, ms: Long): Boolean {
