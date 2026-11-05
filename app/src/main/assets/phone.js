@@ -65,6 +65,7 @@
     ['notif', 'Acesso as notificacoes', 'Ler notificacoes do celular', ['notif'], function () { P.openSettings('notification') }, 'Abrir'],
     ['overlay', 'Sobrepor outros apps', 'Necessario para abrir apps com a tela em segundo plano', ['overlay'], function () { P.openSettings('overlay') }, 'Abrir'],
     ['battery', 'Sem restricao de bateria', 'Evita que o Android pause o JJ', ['battery'], function () { P.openSettings('battery') }, 'Abrir'],
+    ['vd', 'Tela virtual (apps em segundo plano, invisiveis)', 'Abre apps numa tela escondida para tocar musica e operar sem sair do JJ. Experimental; precisa de Android 11+ e acessibilidade', ['vdisplay'], function () { P.vdisplayToggle() }, 'Ligar/Desligar'],
     ['mcp', 'Conectores MCP', 'Notion, GitHub, e-mail, agenda... (cole a lista em JSON)', null, function () { openMcp() }, 'Editar'],
     ['xpower', 'Xiaomi: economia de bateria do JJ', 'Marque "Sem restricoes". Sem isso o HyperOS mata o JJ e desliga a acessibilidade', null, function () { P.openSettings('powerkeeper') }, 'Abrir'],
     ['xauto', 'Xiaomi: autoinicio', 'Ative o JJ na lista de autoinicio', null, function () { P.openSettings('autostart') }, 'Abrir'],

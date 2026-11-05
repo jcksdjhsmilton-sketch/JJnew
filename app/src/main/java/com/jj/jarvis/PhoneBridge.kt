@@ -77,6 +77,13 @@ class PhoneBridge(private val act: Activity) {
     @JavascriptInterface fun shizukuReport(): String = Shizu.lastReport
     @JavascriptInterface fun shizukuSetupDone(): Boolean = PhoneService.prefs(act).getBoolean("shz_setup", false)
 
+    @JavascriptInterface fun vdisplayToggle(): Boolean {
+        val p = PhoneService.prefs(act)
+        val v = !p.getBoolean("vdisplay", true)
+        p.edit().putBoolean("vdisplay", v).apply()
+        return v
+    }
+
     @JavascriptInterface fun auto(): Boolean = PhoneService.prefs(act).getBoolean("auto", true)
 
     @JavascriptInterface fun stop() {
@@ -99,6 +106,7 @@ class PhoneBridge(private val act: Activity) {
         val pm = act.getSystemService(Context.POWER_SERVICE) as PowerManager
         val o = JSONObject()
         o.put("service", PhoneService.running)
+        o.put("vdisplay", PhoneService.prefs(act).getBoolean("vdisplay", true))
         o.put("acc", JJAccessibility.inst != null)
         o.put("acc_dead", AccGuard.enabledInSettings(act) && JJAccessibility.inst == null)
         o.put("notif", JJNotifListener.inst != null)

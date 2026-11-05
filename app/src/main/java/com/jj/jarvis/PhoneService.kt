@@ -56,6 +56,7 @@ class PhoneService : Service() {
     override fun onDestroy() {
         alive = false
         running = false
+        try { VDisplay.release() } catch (e: Exception) {}
         try { if (wl?.isHeld == true) wl?.release() } catch (e: Exception) {}
         super.onDestroy()
     }

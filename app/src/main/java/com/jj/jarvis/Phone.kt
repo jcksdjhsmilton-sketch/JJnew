@@ -22,6 +22,7 @@ import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.net.Uri
 import android.os.BatteryManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -95,6 +96,9 @@ object Phone {
     }
 
     @Volatile private var fastMode = false
+
+    /** Comando "input" do shell, apontando para a tela virtual quando ela esta em uso. */
+    private fun inp(): String = if (JJAccessibility.targetDisplay > 0) "input -d ${JJAccessibility.targetDisplay}" else "input"
     private val KEYEV = mapOf("back" to "KEYCODE_BACK", "home" to "KEYCODE_HOME", "recents" to "KEYCODE_APP_SWITCH",
         "lock" to "KEYCODE_SLEEP", "screenshot" to "KEYCODE_SYSRQ")
 
@@ -141,6 +145,11 @@ object Phone {
                     val r = launch(c, settingsIntent(c, text))
                     Res(r == "ok", if (r == "ok") "abri configuracoes: $text" else r)
                 }
+                "bg_open" -> bgOpen(c, text)
+                "bg_off" -> {
+                    JJAccessibility.targetDisplay = -1
+                    Res(true, "voltei a controlar a tela principal (o app continua rodando na tela virtual)")
+                }
                 "batch" -> batch(c, text)
                 "shell" -> shell(text)
                 "system" -> system(text)
@@ -173,6 +182,10 @@ object Phone {
     }
 
     private fun screenshot(c: Context): Res {
+        if (JJAccessibility.targetDisplay > 0) {
+            val vb = VDisplay.snapshot() ?: return Res(false, "tela virtual ainda sem imagem")
+            return Res(true, "captura da tela virtual", Img.fromBitmap(vb))
+        }
         if (Shizu.ready()) {
             val b = Shizu.bytes("screencap -p")
             if (b != null && b.size > 1000) {
@@ -189,7 +202,7 @@ object Phone {
         val acc = JJAccessibility.inst
         val ok = when {
             text.isNotEmpty() -> (acc ?: return Res(false, NO_ACC)).tapText(text)
-            Shizu.ready() -> Shizu.run("input tap $x $y").first == 0
+            Shizu.ready() -> Shizu.run("${inp()} tap $x $y").first == 0
             acc != null -> acc.tapXY(x.toFloat(), y.toFloat())
             else -> return Res(false, NO_ACC)
         }
@@ -199,8 +212,9 @@ object Phone {
     private fun swipe(c: Context, dir: String): Res {
         if (Shizu.ready()) {
             val dm = c.resources.displayMetrics
-            val w = dm.widthPixels
-            val h = dm.heightPixels
+            val vd = JJAccessibility.targetDisplay > 0
+            val w = if (vd) VDisplay.W else dm.widthPixels
+            val h = if (vd) VDisplay.H else dm.heightPixels
             val (x1, y1, x2, y2) = when (dir.lowercase()) {
                 "up" -> listOf(w / 2, h * 3 / 4, w / 2, h / 4)
                 "down" -> listOf(w / 2, h / 4, w / 2, h * 3 / 4)
@@ -208,7 +222,7 @@ object Phone {
                 "right" -> listOf(w / 5, h / 2, w * 4 / 5, h / 2)
                 else -> return Res(false, "use up, down, left ou right")
             }
-            val ok = Shizu.run("input swipe $x1 $y1 $x2 $y2 300").first == 0
+            val ok = Shizu.run("${inp()} swipe $x1 $y1 $x2 $y2 300").first == 0
             return seen(c, Res(ok, if (ok) "rolei $dir" else "gesto falhou"))
         }
         val acc = JJAccessibility.inst ?: return Res(false, NO_ACC)
@@ -220,10 +234,10 @@ object Phone {
         val acc = JJAccessibility.inst
         var ok = acc?.typeText(text) ?: false
         if (!ok && Shizu.ready() && text.all { it.code in 32..126 }) {
-            ok = Shizu.run("input text " + Shizu.q(text.replace(" ", "%s"))).first == 0
+            ok = Shizu.run("${inp()} text " + Shizu.q(text.replace(" ", "%s"))).first == 0
         }
         if (ok && extra == "submit") {
-            if (Shizu.ready()) Shizu.run("input keyevent KEYCODE_ENTER") else acc?.submit()
+            if (Shizu.ready()) Shizu.run("${inp()} keyevent KEYCODE_ENTER") else acc?.submit()
         }
         return seen(c, Res(ok, if (ok) "digitei" else "nenhum campo de texto em foco"))
     }
@@ -234,7 +248,7 @@ object Phone {
             val cmd = when (n) {
                 "notifications" -> "cmd statusbar expand-notifications"
                 "quick_settings" -> "cmd statusbar expand-settings"
-                else -> KEYEV[n]?.let { "input keyevent $it" }
+                else -> KEYEV[n]?.let { "${inp()} keyevent $it" }
             }
             if (cmd != null) {
                 val ok = Shizu.run(cmd).first == 0
@@ -281,7 +295,7 @@ object Phone {
     @Suppress("DEPRECATION")
     private fun wake(c: Context): Res {
         if (Shizu.ready()) {
-            Shizu.run("input keyevent KEYCODE_WAKEUP")
+            Shizu.run("${inp()} keyevent KEYCODE_WAKEUP")
             return Res(true, "tela acesa")
         }
         val pm = c.getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -475,54 +489,105 @@ object Phone {
         return ok
     }
 
-    /** Apps sem busca por comando: abre, pesquisa, toca no resultado e devolve voce ao JJ (tudo em ~8 s, sem passar pela IA). */
-    private fun playViaUi(c: Context, pkg: String, q: String, wasFront: Boolean): Res {
-        val acc = JJAccessibility.inst ?: return Res(false, "esse app nao aceita comando de busca e a acessibilidade esta desligada")
-        launchPkg(c, pkg)
+    private fun vdEnabled(c: Context): Boolean =
+        Build.VERSION.SDK_INT >= 30 && PhoneService.prefs(c).getBoolean("vdisplay", true) && JJAccessibility.inst != null
+
+    /** Abre o app na TELA VIRTUAL (invisivel) e passa a controlar ela. false = indisponivel (usa a tela principal). */
+    private fun openInVirtual(c: Context, pkg: String): Boolean {
+        if (!vdEnabled(c)) return false
+        val acc = JJAccessibility.inst ?: return false
+        if (!VDisplay.launch(c, pkg)) return false
+        JJAccessibility.targetDisplay = VDisplay.id
         var t = 0
-        while (JJAccessibility.fg != pkg && t < 20) { Thread.sleep(250); t++ }
+        while (acc.rootPkg() != pkg && t < 16) { Thread.sleep(250); t++ }
+        if (acc.rootPkg() == pkg) return true
+        JJAccessibility.targetDisplay = -1
+        return false
+    }
+
+    private fun bgOpen(c: Context, name: String): Res {
+        val pkg = resolveApp(c, name) ?: return Res(false, "app nao encontrado: $name")
+        if (!openInVirtual(c, pkg)) return Res(false, "tela virtual indisponivel neste aparelho (precisa Android 11+, acessibilidade ligada); use open_app")
+        Thread.sleep(700)
+        return Res(true, "abri ${appLabel(c, pkg)} na tela virtual (invisivel). As acoes read_screen/tap/type/swipe/screenshot valem para ela ate bg_off.\n[tela agora] " + (JJAccessibility.inst?.summary() ?: ""))
+    }
+
+    /**
+     * Apps sem comando de busca: abre (na tela virtual, se der), pesquisa, toca no resultado e no play.
+     * Roda inteiro aqui no celular, sem IA no meio (a IA era o que deixava tudo lento e confuso).
+     */
+    private fun playViaUi(c: Context, pkg: String, q: String, wasFront: Boolean, tr: StringBuilder): Res {
+        val acc = JJAccessibility.inst ?: return Res(false, "esse app nao aceita comando de busca e a acessibilidade esta desligada")
+        val label = appLabel(c, pkg)
+        val bg = openInVirtual(c, pkg)
+        tr.append(if (bg) "tela virtual; " else "tela principal; ")
+        if (!bg) {
+            launchPkg(c, pkg)
+            var t = 0
+            while (JJAccessibility.fg != pkg && t < 20) { Thread.sleep(250); t++ }
+        }
         Thread.sleep(900)
-        var typed = false
-        for (i in 0 until 3) {
-            if (!acc.hasEditable()) {
-                acc.tapAny(listOf("pesquis", "buscar", "search", "procurar"))
-                Thread.sleep(800)
+        try {
+            var typed = false
+            for (i in 0 until 3) {
+                if (!acc.hasEditable()) {
+                    val tapped = acc.tapAny(listOf("pesquis", "buscar", "search", "procurar"))
+                    tr.append(if (tapped) "toquei em pesquisar; " else "sem botao de pesquisa; ")
+                    Thread.sleep(900)
+                }
+                typed = acc.typeText(q)
+                if (!typed && Shizu.ready() && q.all { it.code in 32..126 }) {
+                    // campos que nao se declaram "editaveis" (Flutter/React): digita direto no foco
+                    Shizu.run("${inp()} text " + Shizu.q(q.replace(" ", "%s")))
+                    Thread.sleep(400)
+                    typed = acc.screenHasText(q)
+                }
+                if (typed) break
+                Thread.sleep(500)
             }
-            typed = acc.typeText(q)
-            if (typed) break
-            Thread.sleep(500)
-        }
-        if (!typed) {
+            if (!typed) {
+                tr.append("nao consegui digitar; ")
+                return Res(false, "nao achei o campo de busca em $label. [tela agora] ${acc.summary()}")
+            }
+            tr.append("digitei; ")
+            if (Shizu.ready()) Shizu.run("${inp()} keyevent KEYCODE_ENTER") else acc.submit()
+            Thread.sleep(1600)
+            tr.append(if (acc.tapResult(q)) "toquei no resultado; " else "nao achei o resultado; ")
+            Thread.sleep(1200)
+            var np = nowPlaying(c)
+            if (np == null || !np.second) tr.append(if (acc.tapPlay()) "toquei em play; " else "sem botao play; ")
+            np = waitPlaying(c, 5000)
             val scr = acc.summary()
-            if (wasFront) returnToJJ(c)
-            return Res(false, "nao achei o campo de busca em ${appLabel(c, pkg)}. [tela agora] $scr")
+            val npf = np
+            val back = if (!bg && wasFront) " (voltei para o JJ)" else ""
+            val where = if (bg) " em segundo plano (tela virtual)" else ""
+            return if (npf != null && npf.second) Res(true, "tocando$where: ${npf.first}$back")
+            else Res(true, "busquei \"$q\" em $label$where mas nao confirmei que esta tocando. [tela agora] $scr$back")
+        } finally {
+            if (bg) JJAccessibility.targetDisplay = -1  // o app continua rodando na tela virtual
+            else if (wasFront) returnToJJ(c)
         }
-        if (Shizu.ready()) Shizu.run("input keyevent KEYCODE_ENTER") else acc.submit()
-        Thread.sleep(1600)
-        acc.tapResult(q)
-        Thread.sleep(1200)
-        var np = nowPlaying(c)
-        if (np == null || !np.second) acc.tapAny(listOf("reproduzir", "play", "tocar"))
-        np = waitPlaying(c, 5000)
-        val scr = acc.summary()
-        if (wasFront) returnToJJ(c)
-        val back = if (wasFront) " (voltei para o JJ)" else ""
-        return if (np != null && np.second) Res(true, "tocando: ${np.first}$back")
-        else Res(true, "busquei \"$q\" em ${appLabel(c, pkg)} mas nao consegui confirmar que esta tocando. [tela agora] $scr$back")
     }
 
     /**
      * Toca musica. appIn = NOME do app pedido pelo usuario (ex.: "fyzer"); vazio = player padrao.
-     * Ordem: sessao ativa > servico de midia (segundo plano real) > comando de busca do app > operar a tela do app.
-     * Nunca troca de app sozinho e nunca abre pagina web.
+     * Ordem: sessao ativa > servico de midia (segundo plano real) > comando de busca do app > operar o app (tela virtual).
+     * Nunca troca de app sozinho e nunca abre pagina web. O resultado traz "passos" para diagnostico.
      */
     private fun playMusic(c: Context, q: String, appIn: String): Res {
+        val tr = StringBuilder()
+        val r = playMusicCore(c, q, appIn, tr)
+        return if (tr.isEmpty()) r else Res(r.ok, r.text + " | passos: " + tr.toString().trim(), r.image)
+    }
+
+    private fun playMusicCore(c: Context, q: String, appIn: String, tr: StringBuilder): Res {
         val wasFront = jjFront || JJAccessibility.fg == c.packageName
         val explicit = appIn.isNotBlank()
         val player = if (explicit) (resolveApp(c, appIn) ?: return Res(false, "nao achei o app \"$appIn\" instalado (use a acao apps para listar)")) else pickPlayer(c)
         if (player.isEmpty()) return Res(false, "nao ha app de musica padrao; diga em qual app tocar")
         val label = appLabel(c, player)
         val back = if (wasFront) " (voltei para o JJ)" else ""
+        tr.append("app=$label; ")
 
         // 1) o app ja tem sessao ativa: manda tocar sem abrir nada
         val ctl = controller(c, player)
@@ -530,6 +595,9 @@ object Phone {
             try { ctl.transportControls.playFromSearch(q, Bundle()) } catch (e: Exception) {}
             val np0 = waitPlaying(c, 3000)
             if (np0 != null && np0.second) return Res(true, "tocando em segundo plano no $label: ${np0.first}")
+            tr.append("sessao ativa nao tocou; ")
+        } else {
+            tr.append("sem sessao ativa; ")
         }
         // 2) servico de midia do app (sem abrir nada na tela)
         if (browserPlay(c, player, q)) {
@@ -537,7 +605,8 @@ object Phone {
             val np1 = nowPlaying(c)
             return Res(true, "tocando em segundo plano no $label" + (if (np1 != null) ": ${np1.first}" else ""))
         }
-        // 3) o app entende o comando de busca: abre so ate comecar e devolve ao JJ
+        tr.append("servico de midia indisponivel; ")
+        // 3) o app entende o comando de busca
         val handles = c.packageManager.queryIntentActivities(Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH), 0).any { it.activityInfo.packageName == player }
         if (handles) {
             var started = false
@@ -563,10 +632,13 @@ object Phone {
                     PhoneService.prefs(c).edit().putString("music_pkg", player).apply()
                     return Res(true, if (np != null) "tocando no $label: ${np.first}$back" else "pedi para tocar \"$q\" no $label$back")
                 }
+                tr.append("comando de busca nao tocou; ")
             }
+        } else {
+            tr.append("app sem comando de busca; ")
         }
-        // 4) o app nao tem comando de busca: opera a tela dele
-        return playViaUi(c, player, q, wasFront)
+        // 4) opera o app (de preferencia na tela virtual)
+        return playViaUi(c, player, q, wasFront, tr)
     }
 
     private fun media(c: Context, what: String): Res {

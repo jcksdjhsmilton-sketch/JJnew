@@ -13,6 +13,7 @@ import android.os.Looper
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -24,6 +25,37 @@ class JJAccessibility : AccessibilityService() {
     companion object {
         @Volatile var inst: JJAccessibility? = null
         @Volatile var fg: String = ""
+        /** > 0: as acoes (ler, tocar, digitar) valem para essa tela (a tela virtual do JJ) em vez da principal */
+        @Volatile var targetDisplay: Int = -1
+    }
+
+    private fun currentRoot(): AccessibilityNodeInfo? {
+        val d = targetDisplay
+        if (d > 0 && Build.VERSION.SDK_INT >= 30) {
+            val wins = windowsOnAllDisplays.get(d) ?: return null
+            val w = wins.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_APPLICATION && it.root != null } ?: wins.firstOrNull { it.root != null }
+            return w?.root
+        }
+        return rootInActiveWindow
+    }
+
+    /** Pacote do app que esta na tela alvo. */
+    fun rootPkg(): String? = currentRoot()?.packageName?.toString()
+
+    /** Algum texto da tela contem a primeira palavra util de q? (para confirmar que digitou) */
+    fun screenHasText(q: String): Boolean {
+        val w = normText(q).split(Regex("[^a-z0-9]+")).firstOrNull { it.length >= 3 } ?: return false
+        return allNodes().any { normText((it.text ?: "").toString()).contains(w) }
+    }
+
+    /** Toca no botao de tocar (play/reproduzir), sem confundir com "playlist". */
+    fun tapPlay(): Boolean {
+        val rx = Regex("(^|[^a-z])(play|reproduzir|tocar)([^a-z]|$)")
+        for (n in allNodes()) {
+            if (!n.isVisibleToUser) continue
+            if (rx.containsMatchIn(label(n)) && clickNode(n)) return true
+        }
+        return false
     }
 
     override fun onServiceConnected() { inst = this }
@@ -42,7 +74,7 @@ class JJAccessibility : AccessibilityService() {
      * fica embaixo, e antes ela era cortada (o JJ lia mensagens antigas).
      */
     fun readScreen(): String {
-        val root = rootInActiveWindow ?: return "(tela indisponivel agora)"
+        val root = currentRoot() ?: return "(tela indisponivel agora)"
         val lines = ArrayList<String>()
         fun walk(nd: AccessibilityNodeInfo?) {
             if (nd == null || lines.size > 700) return
@@ -68,7 +100,7 @@ class JJAccessibility : AccessibilityService() {
 
     /** Resumo curto do que esta na tela (app + primeiros textos). */
     fun summary(): String {
-        val root = rootInActiveWindow ?: return "(tela indisponivel)"
+        val root = currentRoot() ?: return "(tela indisponivel)"
         val parts = ArrayList<String>()
         fun walk(nd: AccessibilityNodeInfo?) {
             if (nd == null || parts.size > 400) return
@@ -82,7 +114,7 @@ class JJAccessibility : AccessibilityService() {
     }
 
     private fun allNodes(): List<AccessibilityNodeInfo> {
-        val root = rootInActiveWindow ?: return emptyList()
+        val root = currentRoot() ?: return emptyList()
         val out = ArrayList<AccessibilityNodeInfo>()
         fun walk(n: AccessibilityNodeInfo?) {
             if (n == null || out.size > 800) return
@@ -150,7 +182,9 @@ class JJAccessibility : AccessibilityService() {
     fun gesture(p: Path, ms: Long): Boolean {
         val latch = CountDownLatch(1)
         var ok = false
-        val g = GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(p, 0, ms)).build()
+        val gb = GestureDescription.Builder()
+        if (Build.VERSION.SDK_INT >= 32 && targetDisplay > 0) gb.setDisplayId(targetDisplay)
+        val g = gb.addStroke(GestureDescription.StrokeDescription(p, 0, ms)).build()
         val cb = object : AccessibilityService.GestureResultCallback() {
             override fun onCompleted(d: GestureDescription?) { ok = true; latch.countDown() }
             override fun onCancelled(d: GestureDescription?) { latch.countDown() }
@@ -168,7 +202,7 @@ class JJAccessibility : AccessibilityService() {
     }
 
     fun tapText(q: String): Boolean {
-        val root = rootInActiveWindow ?: return false
+        val root = currentRoot() ?: return false
         val list = root.findAccessibilityNodeInfosByText(q)
         for (nd in list) {
             var cur: AccessibilityNodeInfo? = nd
@@ -209,7 +243,7 @@ class JJAccessibility : AccessibilityService() {
     }
 
     fun typeText(t: String): Boolean {
-        val root = rootInActiveWindow ?: return false
+        val root = currentRoot() ?: return false
         val f = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: findEditable(root) ?: return false
         val b = Bundle()
         b.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, t)
@@ -218,7 +252,7 @@ class JJAccessibility : AccessibilityService() {
 
     fun submit(): Boolean {
         if (Build.VERSION.SDK_INT < 30) return false
-        val root = rootInActiveWindow ?: return false
+        val root = currentRoot() ?: return false
         val f = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return false
         return f.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
     }
