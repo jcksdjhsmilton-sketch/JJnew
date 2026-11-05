@@ -16,12 +16,15 @@ import android.location.Location
 import android.location.LocationManager
 import android.media.AudioManager
 import android.media.MediaMetadata
+import android.media.browse.MediaBrowser
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.net.Uri
 import android.os.BatteryManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.provider.AlarmClock
 import android.provider.ContactsContract
@@ -32,6 +35,8 @@ import android.view.KeyEvent
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.Normalizer
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class Res(val ok: Boolean, val text: String, val image: String? = null)
 
@@ -304,26 +309,39 @@ object Phone {
             "shizuku ${if (Shizu.ready()) "ok" else "nao"}; tocando: ${nowPlaying(c)?.first ?: "nada"}"
     }
 
-    private fun openApp(c: Context, name: String): Res {
+    private fun appLabel(c: Context, pkg: String): String =
+        try { c.packageManager.getApplicationLabel(c.packageManager.getApplicationInfo(pkg, 0)).toString() } catch (e: Exception) { pkg }
+
+    /** Acha o app instalado pelo NOME (ou pacote): exato, depois "comeca com", depois "contem", depois todas as palavras. */
+    private fun resolveApp(c: Context, name: String): String? {
+        val q = norm(name).trim()
+        if (q.isEmpty()) return null
+        if (name.contains('.') && installed(c, name.trim())) return name.trim()
         val pm = c.packageManager
+        val apps = pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
+            .map { Pair(norm(it.loadLabel(pm).toString()), it.activityInfo.packageName) }
+            .filter { it.first.isNotEmpty() && it.second != c.packageName }
+        val words = q.split(' ').filter { it.isNotEmpty() }
+        return apps.firstOrNull { it.first == q }?.second
+            ?: apps.firstOrNull { it.first.startsWith(q) }?.second
+            ?: apps.firstOrNull { it.first.contains(q) || q.contains(it.first) }?.second
+            ?: apps.firstOrNull { a -> words.all { a.first.contains(it) } }?.second
+            ?: apps.firstOrNull { a -> words.isNotEmpty() && a.first.contains(words[0]) && words[0].length >= 4 }?.second
+    }
+
+    private fun launchPkg(c: Context, pkg: String): Boolean {
+        if (Shizu.ready() && Shizu.run("monkey -p $pkg -c android.intent.category.LAUNCHER 1", 10).first == 0) return true
+        val li = c.packageManager.getLaunchIntentForPackage(pkg) ?: return false
+        return launch(c, li) == "ok"
+    }
+
+    private fun openApp(c: Context, name: String): Res {
         val q = norm(name)
         if (q.isEmpty()) return Res(false, "diga o nome do app")
-        val list = pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
-        var best: String? = null
-        var bestLabel = ""
-        for (r in list) {
-            val label = r.loadLabel(pm).toString()
-            val n = norm(label)
-            if (n == q) { best = r.activityInfo.packageName; bestLabel = label; break }
-            if (best == null && n.isNotEmpty() && (n.contains(q) || q.contains(n))) { best = r.activityInfo.packageName; bestLabel = label }
-        }
-        val pkg = best ?: return Res(false, "app nao encontrado: $name")
-        if (Shizu.ready() && Shizu.run("monkey -p $pkg -c android.intent.category.LAUNCHER 1", 10).first == 0) {
-            return Res(true, "abri $bestLabel")
-        }
-        val li = pm.getLaunchIntentForPackage(pkg) ?: return Res(false, "sem tela de abertura: $bestLabel")
-        val r = launch(c, li)
-        return Res(r == "ok", if (r == "ok") "abri $bestLabel" else r)
+        val pkg = resolveApp(c, name) ?: return Res(false, "app nao encontrado: $name (use a acao apps para listar)")
+        val label = appLabel(c, pkg)
+        if (!launchPkg(c, pkg)) return Res(false, "sem tela de abertura: $label")
+        return Res(true, "abri $label")
     }
 
     private fun openUrl(c: Context, url: String): Res {
@@ -374,13 +392,9 @@ object Phone {
     }
 
     private fun setPlayer(c: Context, t: String): Res {
-        val pm = c.packageManager
-        val q = norm(t)
-        val found = pm.queryIntentActivities(Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH), 0)
-        val m = found.firstOrNull { it.activityInfo.packageName == t || norm(it.loadLabel(pm).toString()).contains(q) }
-            ?: return Res(false, "player nao encontrado: $t")
-        PhoneService.prefs(c).edit().putString("music_pkg", m.activityInfo.packageName).apply()
-        return Res(true, "player padrao: ${m.loadLabel(pm)}")
+        val pkg = resolveApp(c, t) ?: return Res(false, "player nao encontrado: $t")
+        PhoneService.prefs(c).edit().putString("music_pkg", pkg).apply()
+        return Res(true, "player padrao: ${appLabel(c, pkg)}")
     }
 
     private fun controller(c: Context, pkg: String): MediaController? {
@@ -421,43 +435,138 @@ object Phone {
         return nowPlaying(c)
     }
 
-    private fun playMusic(c: Context, q: String, pkgIn: String): Res {
+    /** Segundo plano REAL: conecta no servico de midia do app (o mesmo que o Android Auto usa) e manda tocar a busca. */
+    private fun browserPlay(c: Context, pkg: String, q: String): Boolean {
+        val svc = c.packageManager.queryIntentServices(Intent("android.media.browse.MediaBrowserService"), 0)
+            .firstOrNull { it.serviceInfo.packageName == pkg } ?: return false
+        val comp = ComponentName(pkg, svc.serviceInfo.name)
+        val latch = CountDownLatch(1)
+        var sent = false
+        var browser: MediaBrowser? = null
+        Handler(Looper.getMainLooper()).post {
+            try {
+                val b = MediaBrowser(c, comp, object : MediaBrowser.ConnectionCallback() {
+                    override fun onConnected() {
+                        try {
+                            val tok = browser?.sessionToken
+                            if (tok != null) {
+                                MediaController(c, tok).transportControls.playFromSearch(q, Bundle())
+                                sent = true
+                            }
+                        } catch (e: Exception) {}
+                        latch.countDown()
+                    }
+                    override fun onConnectionFailed() { latch.countDown() }
+                    override fun onConnectionSuspended() { latch.countDown() }
+                }, null)
+                browser = b
+                b.connect()
+            } catch (e: Exception) { latch.countDown() }
+        }
+        latch.await(5, TimeUnit.SECONDS)
+        var ok = sent
+        if (sent && JJNotifListener.inst != null) {
+            val np = waitPlaying(c, 4500)
+            ok = np != null && np.second
+        } else if (sent) {
+            Thread.sleep(1500)
+        }
+        Handler(Looper.getMainLooper()).post { try { browser?.disconnect() } catch (e: Exception) {} }
+        return ok
+    }
+
+    /** Apps sem busca por comando: abre, pesquisa, toca no resultado e devolve voce ao JJ (tudo em ~8 s, sem passar pela IA). */
+    private fun playViaUi(c: Context, pkg: String, q: String, wasFront: Boolean): Res {
+        val acc = JJAccessibility.inst ?: return Res(false, "esse app nao aceita comando de busca e a acessibilidade esta desligada")
+        launchPkg(c, pkg)
+        var t = 0
+        while (JJAccessibility.fg != pkg && t < 20) { Thread.sleep(250); t++ }
+        Thread.sleep(900)
+        var typed = false
+        for (i in 0 until 3) {
+            if (!acc.hasEditable()) {
+                acc.tapAny(listOf("pesquis", "buscar", "search", "procurar"))
+                Thread.sleep(800)
+            }
+            typed = acc.typeText(q)
+            if (typed) break
+            Thread.sleep(500)
+        }
+        if (!typed) {
+            val scr = acc.summary()
+            if (wasFront) returnToJJ(c)
+            return Res(false, "nao achei o campo de busca em ${appLabel(c, pkg)}. [tela agora] $scr")
+        }
+        if (Shizu.ready()) Shizu.run("input keyevent KEYCODE_ENTER") else acc.submit()
+        Thread.sleep(1600)
+        acc.tapResult(q)
+        Thread.sleep(1200)
+        var np = nowPlaying(c)
+        if (np == null || !np.second) acc.tapAny(listOf("reproduzir", "play", "tocar"))
+        np = waitPlaying(c, 5000)
+        val scr = acc.summary()
+        if (wasFront) returnToJJ(c)
+        val back = if (wasFront) " (voltei para o JJ)" else ""
+        return if (np != null && np.second) Res(true, "tocando: ${np.first}$back")
+        else Res(true, "busquei \"$q\" em ${appLabel(c, pkg)} mas nao consegui confirmar que esta tocando. [tela agora] $scr$back")
+    }
+
+    /**
+     * Toca musica. appIn = NOME do app pedido pelo usuario (ex.: "fyzer"); vazio = player padrao.
+     * Ordem: sessao ativa > servico de midia (segundo plano real) > comando de busca do app > operar a tela do app.
+     * Nunca troca de app sozinho e nunca abre pagina web.
+     */
+    private fun playMusic(c: Context, q: String, appIn: String): Res {
         val wasFront = jjFront || JJAccessibility.fg == c.packageName
-        val player = if (pkgIn.isNotEmpty()) pkgIn else pickPlayer(c)
-        // 1) o player ja tem sessao ativa: manda tocar sem abrir nada (voce continua no JJ)
+        val explicit = appIn.isNotBlank()
+        val player = if (explicit) (resolveApp(c, appIn) ?: return Res(false, "nao achei o app \"$appIn\" instalado (use a acao apps para listar)")) else pickPlayer(c)
+        if (player.isEmpty()) return Res(false, "nao ha app de musica padrao; diga em qual app tocar")
+        val label = appLabel(c, player)
+        val back = if (wasFront) " (voltei para o JJ)" else ""
+
+        // 1) o app ja tem sessao ativa: manda tocar sem abrir nada
         val ctl = controller(c, player)
         if (ctl != null) {
             try { ctl.transportControls.playFromSearch(q, Bundle()) } catch (e: Exception) {}
             val np0 = waitPlaying(c, 3000)
-            if (np0 != null && np0.second) return Res(true, "tocando em segundo plano: ${np0.first}")
+            if (np0 != null && np0.second) return Res(true, "tocando em segundo plano no $label: ${np0.first}")
         }
-        // 2) abre o player so ate comecar a tocar e devolve voce ao JJ
-        var started = false
-        if (Shizu.ready()) {
-            val pk = if (player.isNotEmpty()) "-p $player " else ""
-            started = Shizu.run("am start -a android.media.action.MEDIA_PLAY_FROM_SEARCH ${pk}--es query ${Shizu.q(q)} --es android.intent.extra.focus 'vnd.android.cursor.item/*'", 10).first == 0
+        // 2) servico de midia do app (sem abrir nada na tela)
+        if (browserPlay(c, player, q)) {
+            PhoneService.prefs(c).edit().putString("music_pkg", player).apply()
+            val np1 = nowPlaying(c)
+            return Res(true, "tocando em segundo plano no $label" + (if (np1 != null) ": ${np1.first}" else ""))
         }
-        if (!started) {
-            val i = Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH)
-            i.putExtra(MediaStore.EXTRA_MEDIA_FOCUS, "vnd.android.cursor.item/*")
-            i.putExtra(SearchManager.QUERY, q)
-            if (player.isNotEmpty()) i.setPackage(player)
-            if (i.resolveActivity(c.packageManager) == null) {
-                val r = launch(c, Intent(Intent.ACTION_VIEW, Uri.parse("https://open.spotify.com/search/" + Uri.encode(q))))
-                return Res(r == "ok", "nenhum app de musica aceitou a busca; abri a busca web de \"$q\"")
+        // 3) o app entende o comando de busca: abre so ate comecar e devolve ao JJ
+        val handles = c.packageManager.queryIntentActivities(Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH), 0).any { it.activityInfo.packageName == player }
+        if (handles) {
+            var started = false
+            if (Shizu.ready()) {
+                started = Shizu.run("am start -a android.media.action.MEDIA_PLAY_FROM_SEARCH -p $player --es query ${Shizu.q(q)} --es android.intent.extra.focus 'vnd.android.cursor.item/*'", 10).first == 0
             }
-            val r = launch(c, i)
-            if (r != "ok") return Res(false, r)
+            if (!started) {
+                val i = Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH)
+                i.putExtra(MediaStore.EXTRA_MEDIA_FOCUS, "vnd.android.cursor.item/*")
+                i.putExtra(SearchManager.QUERY, q)
+                i.setPackage(player)
+                started = launch(c, i) == "ok"
+            }
+            if (started) {
+                val verifiable = JJNotifListener.inst != null
+                var np = waitPlaying(c, 7000)
+                if (np == null || !np.second) {
+                    key(c, KeyEvent.KEYCODE_MEDIA_PLAY)
+                    np = waitPlaying(c, 2500)
+                }
+                if (np != null && np.second || !verifiable) {
+                    if (wasFront) returnToJJ(c)
+                    PhoneService.prefs(c).edit().putString("music_pkg", player).apply()
+                    return Res(true, if (np != null) "tocando no $label: ${np.first}$back" else "pedi para tocar \"$q\" no $label$back")
+                }
+            }
         }
-        var np = waitPlaying(c, 7000)
-        if (np == null || !np.second) {
-            key(c, KeyEvent.KEYCODE_MEDIA_PLAY)
-            np = waitPlaying(c, 2500)
-        }
-        if (wasFront) returnToJJ(c)
-        if (player.isNotEmpty()) PhoneService.prefs(c).edit().putString("music_pkg", player).apply()
-        val back = if (wasFront) " (voltei para o JJ)" else ""
-        return Res(true, if (np != null) "tocando${if (np.second) "" else " (parece pausado)"}: ${np.first}$back" else "pedi para tocar \"$q\"$back")
+        // 4) o app nao tem comando de busca: opera a tela dele
+        return playViaUi(c, player, q, wasFront)
     }
 
     private fun media(c: Context, what: String): Res {

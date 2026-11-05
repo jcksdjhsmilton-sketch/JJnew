@@ -16,6 +16,9 @@ import android.view.accessibility.AccessibilityNodeInfo
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
+fun normText(s: String): String =
+    java.text.Normalizer.normalize(s.lowercase(), java.text.Normalizer.Form.NFD).replace(Regex("\\p{Mn}+"), "")
+
 /** Serviço de acessibilidade: é o que permite ao JJ ler a tela, tocar, rolar, digitar e tirar capturas. */
 class JJAccessibility : AccessibilityService() {
     companion object {
@@ -76,6 +79,72 @@ class JJAccessibility : AccessibilityService() {
         walk(root)
         val pick = if (parts.size <= 14) parts else parts.take(4) + "..." + parts.takeLast(10)  // comeco (titulo) + FIM (o mais recente)
         return (root.packageName?.toString() ?: "?") + ": " + pick.joinToString(" | ").take(600)
+    }
+
+    private fun allNodes(): List<AccessibilityNodeInfo> {
+        val root = rootInActiveWindow ?: return emptyList()
+        val out = ArrayList<AccessibilityNodeInfo>()
+        fun walk(n: AccessibilityNodeInfo?) {
+            if (n == null || out.size > 800) return
+            out.add(n)
+            for (i in 0 until n.childCount) walk(n.getChild(i))
+        }
+        walk(root)
+        return out
+    }
+
+    private fun label(n: AccessibilityNodeInfo): String =
+        normText((n.text ?: "").toString() + " " + (n.contentDescription ?: "").toString() + " " + (n.viewIdResourceName ?: ""))
+
+    private fun clickNode(n: AccessibilityNodeInfo): Boolean {
+        var cur: AccessibilityNodeInfo? = n
+        while (cur != null && !cur.isClickable) cur = cur.parent
+        if (cur != null && cur.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
+        val r = Rect()
+        n.getBoundsInScreen(r)
+        return r.width() > 0 && tapXY(r.centerX().toFloat(), r.centerY().toFloat())
+    }
+
+    fun hasEditable(): Boolean = allNodes().any { it.isEditable && it.isVisibleToUser }
+
+    /** Toca no primeiro elemento visivel cujo texto, descricao ou id contenha alguma das palavras (sem acento). */
+    fun tapAny(words: List<String>): Boolean {
+        for (n in allNodes()) {
+            if (!n.isVisibleToUser) continue
+            val l = label(n)
+            if (words.any { l.contains(it) } && clickNode(n)) return true
+        }
+        return false
+    }
+
+    /** Toca no resultado que mais combina com a busca, abaixo do campo de busca. */
+    fun tapResult(q: String): Boolean {
+        val words = normText(q).split(Regex("[^a-z0-9]+")).filter { it.length >= 3 }
+        if (words.isEmpty()) return false
+        val nodes = allNodes()
+        var fieldBottom = 0
+        for (n in nodes) {
+            if (n.isEditable) {
+                val r = Rect()
+                n.getBoundsInScreen(r)
+                fieldBottom = maxOf(fieldBottom, r.bottom)
+            }
+        }
+        var best: AccessibilityNodeInfo? = null
+        var bestScore = 0
+        for (n in nodes) {
+            if (n.isEditable || !n.isVisibleToUser) continue
+            val t = (n.text ?: n.contentDescription)?.toString() ?: continue
+            val r = Rect()
+            n.getBoundsInScreen(r)
+            if (r.top < fieldBottom) continue
+            val l = normText(t)
+            val sc = words.count { l.contains(it) }
+            if (sc > bestScore) { best = n; bestScore = sc }
+        }
+        val b = best ?: return false
+        if (bestScore < minOf(2, words.size)) return false
+        return clickNode(b)
     }
 
     fun gesture(p: Path, ms: Long): Boolean {
